@@ -70,7 +70,7 @@
       <p>为已注册且审核通过的二级域名新增解析记录。</p>
       <div class="doc-table">
         <div><strong>subdomain_id</strong><span>必填。来自二级域名列表的 <code>id</code>。</span></div>
-        <div><strong>name</strong><span>必填。主机记录，支持 <code>@</code> 或相对前缀如 <code>www</code>。</span></div>
+        <div><strong>name</strong><span>必填。主机记录，支持 <code>@</code>、通配符 <code>*</code> 或相对前缀如 <code>www</code>。</span></div>
         <div><strong>type</strong><span>必填。必须在该主域支持的 <code>record_types</code> 内。</span></div>
         <div><strong>value</strong><span>必填。解析值，会按记录类型做后端校验。</span></div>
         <div><strong>line_id</strong><span>可选。默认传 <code>0</code>。</span></div>

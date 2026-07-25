@@ -193,8 +193,10 @@ func (s *AdminDeletionService) deleteRecords(ctx context.Context, adminID int64,
 	deleted := 0
 	zone := dns.Zone{ID: domain.RemoteZoneID, Domain: domain.Domain}
 	for _, record := range records {
-		if err := provider.DeleteRecord(ctx, zone, record.RecordID); err != nil {
-			return deleted, dnsProviderError("删除解析记录失败", err)
+		if remoteID := strings.TrimSpace(record.RecordID); remoteID != "" {
+			if err := provider.DeleteRecord(ctx, zone, remoteID); err != nil && !dns.IsNotFound(err) {
+				return deleted, dnsProviderError("删除解析记录失败", err)
+			}
 		}
 		err := s.Repo.ApplyDeletedRecord(ctx, record.ID, models.OperationLog{
 			UID: record.UID, AdminUID: adminID, Source: source, TargetType: "record", TargetID: fmt.Sprintf("%d", record.ID),

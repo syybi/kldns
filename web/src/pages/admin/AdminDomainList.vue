@@ -3,7 +3,7 @@
     <header class="page-header">
       <div>
         <h1>主域管理</h1>
-        <p class="resource-note">配置开放主域、DNS 平台、记录类型和二级域名注册积分。</p>
+        <p class="resource-note">配置开放主域、选择平台配置、记录类型和二级域名注册积分。</p>
       </div>
       <el-button type="primary" @click="editorRef?.openCreate()"><Globe2 :size="17" />新增主域</el-button>
     </header>
@@ -32,7 +32,13 @@
       @update:page-size="changePageSize"
     />
 
-    <DomainEditorDialog ref="editorRef" :groups="groups" :providers="providers" @saved="load" />
+    <DomainEditorDialog
+      ref="editorRef"
+      :groups="groups"
+      :provider-configs="providerConfigs"
+      :providers="providers"
+      @saved="load"
+    />
   </section>
 </template>
 
@@ -45,10 +51,12 @@ import {
   deleteAdminDomain,
   listAdminDomainsPage,
   listAdminGroups,
+  listAdminProviderConfigs,
   listProviders,
   syncAdminDomainRecords,
   type AdminDomain,
   type AdminGroup,
+  type AdminProviderConfig,
   type ProviderSummary,
 } from '../../api/admin'
 import DomainEditorDialog from '../../features/admin-domains/DomainEditorDialog.vue'
@@ -58,6 +66,7 @@ type DomainEditorInstance = InstanceType<typeof DomainEditorDialog>
 
 const domains = ref<AdminDomain[]>([])
 const providers = ref<ProviderSummary[]>([])
+const providerConfigs = ref<AdminProviderConfig[]>([])
 const groups = ref<AdminGroup[]>([])
 const loading = ref(false)
 const syncingID = ref(0)
@@ -72,14 +81,16 @@ onMounted(load)
 async function load() {
   loading.value = true
   try {
-    const [domainResponse, providerResponse, groupResponse] = await Promise.all([
+    const [domainResponse, providerResponse, configResponse, groupResponse] = await Promise.all([
       listAdminDomainsPage({ ...filterParams(), page: page.value, page_size: pageSize.value }),
       listProviders(),
+      listAdminProviderConfigs(),
       listAdminGroups(),
     ])
     domains.value = domainResponse.data.items
     total.value = domainResponse.data.total
     providers.value = providerResponse.data
+    providerConfigs.value = configResponse.data
     groups.value = groupResponse.data
   } finally {
     loading.value = false

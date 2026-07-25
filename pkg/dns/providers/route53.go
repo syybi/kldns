@@ -96,11 +96,11 @@ func (p *route53Provider) Label() string {
 }
 
 func (p *route53Provider) ConfigFields() []dns.ConfigField {
-	return []dns.ConfigField{
-		{Name: "AccessKeyId", Label: "AccessKeyId", Required: true, Secret: true},
-		{Name: "SecretAccessKey", Label: "SecretAccessKey", Required: true, Secret: true},
-		{Name: "SessionToken", Label: "SessionToken", Secret: true, Description: "Optional AWS temporary credential token"},
-	}
+	return withProxyField(
+		dns.ConfigField{Name: "AccessKeyId", Label: "AccessKeyId", Required: true, Secret: true},
+		dns.ConfigField{Name: "SecretAccessKey", Label: "SecretAccessKey", Required: true, Secret: true},
+		dns.ConfigField{Name: "SessionToken", Label: "SessionToken", Secret: true, Description: "Optional AWS temporary credential token"},
+	)
 }
 
 func (p *route53Provider) Configure(config map[string]string) error {
@@ -108,8 +108,8 @@ func (p *route53Provider) Configure(config map[string]string) error {
 	p.secretAccessKey = strings.TrimSpace(config["SecretAccessKey"])
 	p.sessionToken = strings.TrimSpace(config["SessionToken"])
 	p.baseURL = providerhttp.NormalizeBaseURL(config["BaseURL"], route53DefaultBaseURL, false)
-	if p.client == nil {
-		p.client = providerhttp.NewClient()
+	if err := applyHTTPClient(&p.client, config); err != nil {
+		return err
 	}
 	if p.now == nil {
 		p.now = func() time.Time { return time.Now().UTC() }
@@ -159,10 +159,91 @@ func (p *route53Provider) ListRecordLines(context.Context, dns.Zone) ([]dns.Reco
 
 func (p *route53Provider) CreateRecord(ctx context.Context, zone dns.Zone, input dns.RecordInput) (dns.Record, error) {
 	record := route53RecordFromInput(zone, input)
+	sets, err := p.listRecordSets(ctx, zone)
+	if err != nil {
+		return dns.Record{}, err
+	}
+	for _, current := range sets {
+		if !route53SameRecordSetKey(current, record) {
+			continue
+		}
+		var added bool
+		current.ResourceRecords, added = appendUniqueRoute53Value(current.ResourceRecords, record.ResourceRecords[0])
+		if added {
+			if err := p.changeRecordSet(ctx, zone.ID, "UPSERT", current, "create_record"); err != nil {
+				return dns.Record{}, err
+			}
+		}
+		return route53InputToDomain(current, input, zone.Domain), nil
+	}
 	if err := p.changeRecordSet(ctx, zone.ID, "CREATE", record, "create_record"); err != nil {
 		return dns.Record{}, err
 	}
 	return route53RecordSetToDomain(record, zone.Domain), nil
+}
+
+func (p *route53Provider) UpdateRecordValue(ctx context.Context, zone dns.Zone, remoteID string, oldInput dns.RecordInput, nextInput dns.RecordInput) (dns.Record, error) {
+	current, err := p.findRecordSet(ctx, zone, remoteID)
+	if err != nil {
+		return dns.Record{}, err
+	}
+	next := route53RecordFromInput(zone, nextInput)
+	oldValue := route53ResourceRecord{Value: route53FormatValue(oldInput.Type, oldInput.Value)}
+	if route53SameRecordSetKey(current, next) {
+		values := route53ResourceValues(current.ResourceRecords)
+		updated, ok := replaceRecordValue(values, oldValue.Value, next.ResourceRecords[0].Value)
+		if !ok {
+			return dns.Record{}, &dns.ProviderError{Provider: p.Key(), Operation: "update_record", Message: "record value not found or already exists"}
+		}
+		current.ResourceRecords = route53ResourceRecords(updated)
+		if err := p.changeRecordSet(ctx, zone.ID, "UPSERT", current, "update_record"); err != nil {
+			return dns.Record{}, err
+		}
+		return route53InputToDomain(current, nextInput, zone.Domain), nil
+	}
+
+	remaining, ok := removeRecordValue(route53ResourceValues(current.ResourceRecords), oldValue.Value)
+	if !ok {
+		return dns.Record{}, &dns.ProviderError{Provider: p.Key(), Operation: "update_record", Message: "record value not found"}
+	}
+	changes := []route53RecordSetChange{{Action: "DELETE", Record: current}}
+	if len(remaining) > 0 {
+		kept := current
+		kept.ResourceRecords = route53ResourceRecords(remaining)
+		changes = append(changes, route53RecordSetChange{Action: "UPSERT", Record: kept})
+	}
+	sets, err := p.listRecordSets(ctx, zone)
+	if err != nil {
+		return dns.Record{}, err
+	}
+	for _, target := range sets {
+		if route53SameRecordSetKey(target, next) {
+			target.ResourceRecords, _ = appendUniqueRoute53Value(target.ResourceRecords, next.ResourceRecords[0])
+			next = target
+			break
+		}
+	}
+	changes = append(changes, route53RecordSetChange{Action: "UPSERT", Record: next})
+	if err := p.changeRecordSets(ctx, zone.ID, changes, "update_record"); err != nil {
+		return dns.Record{}, err
+	}
+	return route53InputToDomain(next, nextInput, zone.Domain), nil
+}
+
+func (p *route53Provider) DeleteRecordValue(ctx context.Context, zone dns.Zone, remoteID string, input dns.RecordInput) error {
+	current, err := p.findRecordSet(ctx, zone, remoteID)
+	if err != nil {
+		return err
+	}
+	remaining, ok := removeRecordValue(route53ResourceValues(current.ResourceRecords), route53FormatValue(input.Type, input.Value))
+	if !ok {
+		return &dns.ProviderError{Provider: p.Key(), Operation: "delete_record", Message: "record value not found", NotFound: true}
+	}
+	if len(remaining) == 0 {
+		return p.changeRecordSet(ctx, zone.ID, "DELETE", current, "delete_record")
+	}
+	current.ResourceRecords = route53ResourceRecords(remaining)
+	return p.changeRecordSet(ctx, zone.ID, "UPSERT", current, "delete_record")
 }
 
 func (p *route53Provider) UpdateRecord(ctx context.Context, zone dns.Zone, remoteID string, input dns.RecordInput) (dns.Record, error) {
@@ -207,9 +288,44 @@ func (p *route53Provider) ListRecords(ctx context.Context, zone dns.Zone) ([]dns
 	}
 	records := make([]dns.Record, 0, len(sets))
 	for _, set := range sets {
-		records = append(records, route53RecordSetToDomain(set, zone.Domain))
+		if len(set.ResourceRecords) == 0 {
+			records = append(records, route53RecordSetToDomain(set, zone.Domain))
+			continue
+		}
+		for _, value := range set.ResourceRecords {
+			item := set
+			item.ResourceRecords = []route53ResourceRecord{value}
+			records = append(records, route53RecordSetToDomain(item, zone.Domain))
+		}
 	}
 	return records, nil
+}
+
+func route53InputToDomain(record route53RecordSet, input dns.RecordInput, domain string) dns.Record {
+	result := route53RecordSetToDomain(record, domain)
+	result.Value = route53DisplayValue(strings.ToUpper(strings.TrimSpace(input.Type)), route53RecordFromInput(dns.Zone{Domain: domain}, input))
+	return result
+}
+
+func appendUniqueRoute53Value(values []route53ResourceRecord, value route53ResourceRecord) ([]route53ResourceRecord, bool) {
+	updated, added := appendUniqueRecordValue(route53ResourceValues(values), value.Value)
+	return route53ResourceRecords(updated), added
+}
+
+func route53ResourceValues(records []route53ResourceRecord) []string {
+	values := make([]string, 0, len(records))
+	for _, record := range records {
+		values = append(values, record.Value)
+	}
+	return values
+}
+
+func route53ResourceRecords(values []string) []route53ResourceRecord {
+	records := make([]route53ResourceRecord, 0, len(values))
+	for _, value := range values {
+		records = append(records, route53ResourceRecord{Value: value})
+	}
+	return records
 }
 
 func (p *route53Provider) listRecordSets(ctx context.Context, zone dns.Zone) ([]route53RecordSet, error) {
@@ -253,7 +369,7 @@ func (p *route53Provider) findRecordSet(ctx context.Context, zone dns.Zone, remo
 			return record, nil
 		}
 	}
-	return route53RecordSet{}, &dns.ProviderError{Provider: p.Key(), Operation: "get_record", Message: "record not found"}
+	return route53RecordSet{}, &dns.ProviderError{Provider: p.Key(), Operation: "get_record", Message: "record not found", NotFound: true}
 }
 
 func (p *route53Provider) changeRecordSet(ctx context.Context, zoneID string, action string, record route53RecordSet, operation string) error {
@@ -299,7 +415,7 @@ func (p *route53Provider) doXML(ctx context.Context, method string, path string,
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		var errorBody route53ErrorResponse
 		_ = xml.Unmarshal(data, &errorBody)
-		return &dns.ProviderError{Provider: p.Key(), Operation: operation, Message: route53ErrorMessage(resp.StatusCode, errorBody, data)}
+		return &dns.ProviderError{Provider: p.Key(), Operation: operation, StatusCode: resp.StatusCode, Message: route53ErrorMessage(resp.StatusCode, errorBody, data)}
 	}
 	if out != nil && len(bytes.TrimSpace(data)) > 0 {
 		if err := xml.Unmarshal(data, out); err != nil {

@@ -21,8 +21,34 @@ func TestAllLegacyProvidersAreRegistered(t *testing.T) {
 			if provider.Label() == "" || len(provider.ConfigFields()) == 0 {
 				t.Fatalf("provider %s has incomplete metadata", key)
 			}
+			if !hasConfigField(provider.ConfigFields(), "ProxyURL") {
+				t.Fatalf("provider %s missing ProxyURL config field", key)
+			}
 		})
 	}
+}
+
+func TestProviderConfigureRejectsInvalidProxy(t *testing.T) {
+	provider, ok := dns.New("Cloudflare")
+	if !ok {
+		t.Fatal("Cloudflare provider not registered")
+	}
+	err := provider.Configure(map[string]string{
+		"ApiToken": "token",
+		"ProxyURL": "ftp://127.0.0.1:21",
+	})
+	if err == nil {
+		t.Fatal("expected invalid proxy error")
+	}
+}
+
+func hasConfigField(fields []dns.ConfigField, name string) bool {
+	for _, field := range fields {
+		if field.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func TestProviderCheckRequiresConfiguredSecrets(t *testing.T) {

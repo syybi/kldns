@@ -82,18 +82,18 @@ func (p *dnscomProvider) Label() string {
 }
 
 func (p *dnscomProvider) ConfigFields() []dns.ConfigField {
-	return []dns.ConfigField{
-		{Name: "ApiKey", Label: "ApiKey", Required: true, Secret: true},
-		{Name: "ApiSecret", Label: "ApiSecret", Required: true, Secret: true},
-	}
+	return withProxyField(
+		dns.ConfigField{Name: "ApiKey", Label: "ApiKey", Required: true, Secret: true},
+		dns.ConfigField{Name: "ApiSecret", Label: "ApiSecret", Required: true, Secret: true},
+	)
 }
 
 func (p *dnscomProvider) Configure(config map[string]string) error {
 	p.apiKey = strings.TrimSpace(config["ApiKey"])
 	p.apiSecret = strings.TrimSpace(config["ApiSecret"])
 	p.baseURL = providerhttp.NormalizeBaseURL(config["BaseURL"], dnscomDefaultBaseURL, true)
-	if p.client == nil {
-		p.client = providerhttp.NewClient()
+	if err := applyHTTPClient(&p.client, config); err != nil {
+		return err
 	}
 	if p.now == nil {
 		p.now = func() time.Time { return time.Now() }
@@ -249,7 +249,7 @@ func (p *dnscomProvider) doForm(ctx context.Context, action string, params map[s
 		return &dns.ProviderError{Provider: p.Key(), Operation: operation, Message: "decode response failed"}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 || ret.Code != 0 {
-		return &dns.ProviderError{Provider: p.Key(), Operation: operation, Message: dnscomErrorMessage(resp.StatusCode, ret.Message)}
+		return &dns.ProviderError{Provider: p.Key(), Operation: operation, StatusCode: resp.StatusCode, Message: dnscomErrorMessage(resp.StatusCode, ret.Message)}
 	}
 	if out != nil && len(ret.Data) > 0 && string(ret.Data) != "null" {
 		if err := json.Unmarshal(ret.Data, out); err != nil {

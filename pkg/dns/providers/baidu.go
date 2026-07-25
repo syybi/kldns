@@ -96,18 +96,18 @@ func (p *baiduProvider) Label() string {
 }
 
 func (p *baiduProvider) ConfigFields() []dns.ConfigField {
-	return []dns.ConfigField{
-		{Name: "AccessKeyId", Label: "AccessKeyId", Required: true, Secret: true},
-		{Name: "SecretAccessKey", Label: "SecretAccessKey", Required: true, Secret: true},
-	}
+	return withProxyField(
+		dns.ConfigField{Name: "AccessKeyId", Label: "AccessKeyId", Required: true, Secret: true},
+		dns.ConfigField{Name: "SecretAccessKey", Label: "SecretAccessKey", Required: true, Secret: true},
+	)
 }
 
 func (p *baiduProvider) Configure(config map[string]string) error {
 	p.accessKeyID = strings.TrimSpace(config["AccessKeyId"])
 	p.secretAccessKey = strings.TrimSpace(config["SecretAccessKey"])
 	p.baseURL = providerhttp.NormalizeBaseURL(config["BaseURL"], baiduDefaultBaseURL, false)
-	if p.client == nil {
-		p.client = providerhttp.NewClient()
+	if err := applyHTTPClient(&p.client, config); err != nil {
+		return err
 	}
 	if p.now == nil {
 		p.now = func() time.Time { return time.Now().UTC() }
@@ -204,7 +204,7 @@ func (p *baiduProvider) GetRecord(ctx context.Context, zone dns.Zone, remoteID s
 			return baiduRecordToDomain(record), nil
 		}
 	}
-	return dns.Record{}, &dns.ProviderError{Provider: p.Key(), Operation: "get_record", Message: "record not found"}
+	return dns.Record{}, &dns.ProviderError{Provider: p.Key(), Operation: "get_record", Message: "record not found", NotFound: true}
 }
 
 func (p *baiduProvider) ListRecords(ctx context.Context, zone dns.Zone) ([]dns.Record, error) {
@@ -270,7 +270,7 @@ func (p *baiduProvider) doJSON(ctx context.Context, method string, path string, 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		var errorBody baiduErrorResponse
 		_ = json.Unmarshal(data, &errorBody)
-		return &dns.ProviderError{Provider: p.Key(), Operation: operation, Message: baiduErrorMessage(resp.StatusCode, errorBody)}
+		return &dns.ProviderError{Provider: p.Key(), Operation: operation, StatusCode: resp.StatusCode, Message: baiduErrorMessage(resp.StatusCode, errorBody)}
 	}
 	if out != nil && len(data) > 0 {
 		if err := json.Unmarshal(data, out); err != nil {

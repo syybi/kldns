@@ -1,6 +1,7 @@
 package repositories
 
 import (
+	"context"
 	"database/sql"
 	migrationassets "kldns/migrations"
 	"path/filepath"
@@ -41,7 +42,10 @@ func TestInitialMigrationEnablesConstraints(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO dns_providers(key, config_ciphertext) VALUES ('fake', '{}')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO domains(id, provider_key, remote_zone_id, domain, group_policy, record_types) VALUES (1, 'fake', 'z1', 'example.com', '0', 'A')`); err != nil {
+	if _, err := db.Exec(`INSERT INTO provider_configs(id, provider_key, name, config_ciphertext) VALUES (1, 'fake', 'fake-main', 'cipher')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO domains(id, provider_key, provider_config_id, remote_zone_id, domain, group_policy, record_types) VALUES (1, 'fake', 1, 'z1', 'example.com', '0', 'A')`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO records(uid, did, record_id, name, type, value, line_id, line)
@@ -72,6 +76,86 @@ func TestEmbeddedMigrationsInitializeSchema(t *testing.T) {
 	}
 }
 
+func TestProviderConfigMigrationMovesDomainCredentials(t *testing.T) {
+	db, err := OpenSQLite(filepath.Join(t.TempDir(), "kldns.db"), 1000, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := RunMigrations(db.SQLDB(), "../migrations"); err != nil {
+		t.Fatal(err)
+	}
+	var hasColumn int
+	if err := db.QueryRow(`SELECT COUNT(1) FROM pragma_table_info('domains') WHERE name = 'provider_config_id'`).Scan(&hasColumn); err != nil {
+		t.Fatal(err)
+	}
+	if hasColumn != 1 {
+		t.Fatal("domains.provider_config_id should exist after migration")
+	}
+	var legacyColumn int
+	if err := db.QueryRow(`SELECT COUNT(1) FROM pragma_table_info('domains') WHERE name = 'provider_config_ciphertext'`).Scan(&legacyColumn); err != nil {
+		t.Fatal(err)
+	}
+	if legacyColumn != 0 {
+		t.Fatal("domains.provider_config_ciphertext should be removed after migration")
+	}
+	if _, err := db.Exec(`INSERT INTO dns_providers(key, config_ciphertext) VALUES ('fake', '')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO provider_configs(id, provider_key, name, config_ciphertext) VALUES (10, 'fake', 'acct-a', 'cipher-a')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO provider_configs(id, provider_key, name, config_ciphertext) VALUES (11, 'fake', 'acct-b', 'cipher-b')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO domains(provider_key, provider_config_id, remote_zone_id, domain, group_policy, record_types)
+		VALUES ('fake', 10, 'z1', 'a.example', '0', 'A'), ('fake', 11, 'z2', 'b.example', '0', 'A')`); err != nil {
+		t.Fatal(err)
+	}
+	items, err := NewProviderConfigsRepository(db).List(context.Background(), ProviderConfigFilter{ProviderKey: "fake"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("provider configs = %#v, want 2", items)
+	}
+}
+
+func TestRecordSetMigrationAllowsMultipleValuesPerNameAndType(t *testing.T) {
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "kldns.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := ConfigureSQLite(db, 1000, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunMigrations(db, "../migrations"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO dns_providers(key, config_ciphertext) VALUES ('fake', '{}')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO provider_configs(id, provider_key, name, config_ciphertext) VALUES (1, 'fake', 'fake-main', 'cipher')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO domains(id, provider_key, provider_config_id, remote_zone_id, domain, group_policy, record_types) VALUES (1, 'fake', 1, 'z1', 'example.com', '0', 'A,TXT')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO users(id, group_id, status, username, password_hash, sid, points) VALUES (1, 100, 2, 'alice', 'hash', 'alice', 10)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO records(uid, did, record_id, name, type, value, line_id) VALUES
+		(1, 1, 'remote-1', 'www', 'A', '192.0.2.1', '0'),
+		(1, 1, 'remote-2', 'www', 'A', '192.0.2.2', '0')`); err != nil {
+		t.Fatalf("multiple values in one RRset should be allowed: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO records(uid, did, record_id, name, type, value, line_id)
+		VALUES (1, 1, 'remote-3', 'www', 'A', '192.0.2.1', '0')`); err == nil {
+		t.Fatal("an exact duplicate record should remain unique")
+	}
+}
+
 func TestRejectedSubdomainHistoryDoesNotOccupyName(t *testing.T) {
 	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "kldns.db"))
 	if err != nil {
@@ -87,7 +171,10 @@ func TestRejectedSubdomainHistoryDoesNotOccupyName(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO dns_providers(key, config_ciphertext) VALUES ('fake', '{}')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO domains(id, provider_key, remote_zone_id, domain, group_policy, record_types) VALUES (1, 'fake', 'z1', 'example.com', '0', 'A')`); err != nil {
+	if _, err := db.Exec(`INSERT INTO provider_configs(id, provider_key, name, config_ciphertext) VALUES (1, 'fake', 'fake-main', 'cipher')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO domains(id, provider_key, provider_config_id, remote_zone_id, domain, group_policy, record_types) VALUES (1, 'fake', 1, 'z1', 'example.com', '0', 'A')`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO users(id, group_id, status, username, password_hash, sid, points) VALUES (1, 100, 2, 'alice', 'hash', 'alice', 10)`); err != nil {

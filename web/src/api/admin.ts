@@ -19,7 +19,8 @@ export interface AdminGroup {
 export interface AdminDomain {
   id: number
   provider_key: string
-  provider_config_stored: boolean
+  provider_config_id: number
+  provider_config_name: string
   remote_zone_id: string
   domain: string
   group_policy: string
@@ -28,6 +29,16 @@ export interface AdminDomain {
   points_cost: number
   require_review: number
   description: string
+}
+
+export interface AdminProviderConfig {
+  id: number
+  provider_key: string
+  name: string
+  config_stored: boolean
+  domain_count: number
+  created_at: number
+  updated_at: number
 }
 
 export interface AdminSubdomain {
@@ -102,8 +113,7 @@ export interface SettingItem {
 
 export interface AdminDomainPayload {
   id?: number
-  provider_key: string
-  provider_config: Record<string, string>
+  provider_config_id: number
   remote_zone_id: string
   domain: string
   group_policy: string
@@ -112,6 +122,18 @@ export interface AdminDomainPayload {
   points_cost: number
   require_review: number
   description: string
+}
+
+export interface AdminProviderConfigPayload {
+  id?: number
+  provider_key: string
+  name: string
+  config: Record<string, string>
+}
+
+export interface AdminProviderConfigQuery {
+  provider?: string
+  keyword?: string
 }
 
 export interface AdminUserQuery {
@@ -234,8 +256,27 @@ export function listProviders() {
   return http.get<unknown, ApiEnvelope<ProviderSummary[]>>('/admin/dns-providers')
 }
 
-export function listProviderZones(payload: { key: string; config: Record<string, string>; domain_id?: number }) {
+export function listProviderZones(payload: { key: string; config?: Record<string, string>; provider_config_id?: number }) {
   return http.post<unknown, ApiEnvelope<ProviderZone[]>>('/admin/dns-providers/zones', payload)
+}
+
+export function listAdminProviderConfigs(params: AdminProviderConfigQuery = {}) {
+  return http.get<unknown, ApiEnvelope<AdminProviderConfig[]>>('/admin/provider-configs', { params })
+}
+
+export function listAdminProviderConfigsPage(params: AdminProviderConfigQuery & PageQuery) {
+  return http.get<unknown, ApiEnvelope<PageResult<AdminProviderConfig>>>('/admin/provider-configs', { params })
+}
+
+export function saveAdminProviderConfig(payload: AdminProviderConfigPayload) {
+  const path = payload.id ? `/admin/provider-configs/${payload.id}` : '/admin/provider-configs'
+  return payload.id
+    ? http.put<unknown, ApiEnvelope<{ id: number }>>(path, payload)
+    : http.post<unknown, ApiEnvelope<{ id: number }>>(path, payload)
+}
+
+export function deleteAdminProviderConfig(id: number) {
+  return http.delete<unknown, ApiEnvelope<{ deleted: boolean }>>(`/admin/provider-configs/${id}`)
 }
 
 export function listAdminRecords(params: AdminRecordQuery = {}) {

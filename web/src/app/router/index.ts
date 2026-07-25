@@ -15,6 +15,7 @@ const UserApiDocs = () => import('../../pages/user/UserApiDocs.vue')
 const UserPasswordPage = () => import('../../pages/user/UserPasswordPage.vue')
 const AdminDashboard = () => import('../../pages/admin/AdminDashboard.vue')
 const AdminDomainList = () => import('../../pages/admin/AdminDomainList.vue')
+const AdminProviderConfigList = () => import('../../pages/admin/AdminProviderConfigList.vue')
 const AdminRecordList = () => import('../../pages/admin/AdminRecordList.vue')
 const AdminSubdomainList = () => import('../../pages/admin/AdminSubdomainList.vue')
 const AdminUserList = () => import('../../pages/admin/AdminUserList.vue')
@@ -54,9 +55,10 @@ export const router = createRouter({
         { path: 'groups', component: AdminGroupList },
         { path: 'points', component: AdminPointList },
         { path: 'domains', component: AdminDomainList },
+        { path: 'provider-configs', component: AdminProviderConfigList },
         { path: 'subdomains', component: AdminSubdomainList },
         { path: 'records', component: AdminRecordList },
-        { path: 'providers', redirect: '/admin/domains' },
+        { path: 'providers', redirect: '/admin/provider-configs' },
         { path: 'logs', component: AdminLogList },
         { path: 'settings', component: AdminSettings },
       ],

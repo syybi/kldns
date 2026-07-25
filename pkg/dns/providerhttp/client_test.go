@@ -41,3 +41,35 @@ func TestNewClientUsesDefaultTimeout(t *testing.T) {
 		t.Fatal("NewClient should return *http.Client")
 	}
 }
+
+func TestNewClientWithProxyAcceptsHTTPAndSOCKS5(t *testing.T) {
+	for _, proxyURL := range []string{
+		"",
+		"http://127.0.0.1:7890",
+		"https://user:pass@proxy.example:8443",
+		"socks5://127.0.0.1:1080",
+		"socks5h://user:pass@127.0.0.1:1080",
+	} {
+		client, err := NewClientWithProxy(proxyURL)
+		if err != nil {
+			t.Fatalf("proxy %q: %v", proxyURL, err)
+		}
+		if client == nil || client.Transport == nil {
+			t.Fatalf("proxy %q returned empty client", proxyURL)
+		}
+	}
+}
+
+func TestNewClientWithProxyRejectsInvalid(t *testing.T) {
+	cases := []string{
+		"://bad",
+		"ftp://127.0.0.1:21",
+		"not-a-url",
+		"http://",
+	}
+	for _, proxyURL := range cases {
+		if _, err := NewClientWithProxy(proxyURL); err == nil {
+			t.Fatalf("proxy %q should fail", proxyURL)
+		}
+	}
+}

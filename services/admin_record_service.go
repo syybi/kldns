@@ -15,7 +15,7 @@ type AdminRecordRepository interface {
 	GetUser(ctx context.Context, id int64) (models.User, error)
 	GetDomain(ctx context.Context, did int64) (models.Domain, error)
 	GetRecord(ctx context.Context, id int64) (models.Record, error)
-	RecordNameExists(ctx context.Context, did int64, name string, recordType string, ignoreID int64) (bool, error)
+	RecordConflictExists(ctx context.Context, did int64, name string, recordType string, value string, lineID string, ignoreID int64) (bool, error)
 	ApplyAdminCreatedRecord(ctx context.Context, record models.Record, log models.OperationLog) error
 	ApplyAdminUpdatedRecord(ctx context.Context, recordID int64, record models.Record, log models.OperationLog) error
 	ApplyDeletedRecord(ctx context.Context, recordID int64, log models.OperationLog) error
@@ -127,16 +127,17 @@ func (s *AdminRecordService) prepareRecord(ctx context.Context, input AdminRecor
 	if !slices.Contains(domain.RecordTypes, recordType) {
 		return models.Domain{}, models.Record{}, apperrors.New(apperrors.CodeForbidden, "当前主域不支持此解析类型")
 	}
-	conflict, err := s.Repo.RecordNameExists(ctx, domain.ID, name, recordType, ignoreID)
+	lineID := defaultLineID(input.LineID)
+	conflict, err := s.Repo.RecordConflictExists(ctx, domain.ID, name, recordType, value, lineID, ignoreID)
 	if err != nil {
 		return models.Domain{}, models.Record{}, apperrors.Wrap(apperrors.CodeInternal, "检查记录冲突失败", err)
 	}
 	if conflict {
-		return models.Domain{}, models.Record{}, apperrors.New(apperrors.CodeConflict, "此主机记录与解析类型已被使用，或 CNAME 记录与其他类型冲突")
+		return models.Domain{}, models.Record{}, apperrors.New(apperrors.CodeConflict, "完全相同的解析记录已存在，或 CNAME 记录与同名其他记录冲突")
 	}
 	return domain, models.Record{
 		UID: input.UID, DID: domain.ID, Name: name, Type: recordType,
-		Value: value, LineID: defaultLineID(input.LineID), Line: "默认",
+		Value: value, LineID: lineID, Line: "默认",
 	}, nil
 }
 

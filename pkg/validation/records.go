@@ -61,8 +61,14 @@ func ValidateRecordPrefix(name string, reserved []string) (string, string, bool)
 	if name == "@" {
 		return name, "", true
 	}
-	if !prefixPattern.MatchString(name) {
-		return "", "域名前缀格式不正确", false
+	parts := strings.Split(name, ".")
+	for index, part := range parts {
+		if part == "*" && index == 0 {
+			continue
+		}
+		if !prefixPattern.MatchString(part) {
+			return "", "域名前缀格式不正确", false
+		}
 	}
 	return name, "", true
 }
@@ -95,7 +101,10 @@ func ValidateRelativeRecordName(name string) (string, string, bool) {
 		return name, "", true
 	}
 	parts := strings.Split(name, ".")
-	for _, part := range parts {
+	for index, part := range parts {
+		if part == "*" && index == 0 {
+			continue
+		}
 		if !hostLabelPattern.MatchString(part) {
 			return "", "主机记录格式不正确", false
 		}

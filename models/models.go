@@ -12,6 +12,7 @@ type User struct {
 type Domain struct {
 	ID                       int64    `json:"id"`
 	ProviderKey              string   `json:"provider_key"`
+	ProviderConfigID         int64    `json:"provider_config_id"`
 	ProviderConfigCiphertext string   `json:"-"`
 	RemoteZoneID             string   `json:"remote_zone_id"`
 	Domain                   string   `json:"domain"`

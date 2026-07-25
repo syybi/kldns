@@ -113,10 +113,10 @@ func (p *googleProvider) Label() string {
 }
 
 func (p *googleProvider) ConfigFields() []dns.ConfigField {
-	return []dns.ConfigField{
-		{Name: "ProjectId", Label: "ProjectId", Description: "Optional; defaults to service account project_id"},
-		{Name: "ServiceAccountJson", Label: "ServiceAccountJson", Required: true, Secret: true, Description: "Google Cloud service account JSON"},
-	}
+	return withProxyField(
+		dns.ConfigField{Name: "ProjectId", Label: "ProjectId", Description: "Optional; defaults to service account project_id"},
+		dns.ConfigField{Name: "ServiceAccountJson", Label: "ServiceAccountJson", Required: true, Secret: true, Description: "Google Cloud service account JSON"},
+	)
 }
 
 func (p *googleProvider) Configure(config map[string]string) error {
@@ -135,8 +135,8 @@ func (p *googleProvider) Configure(config map[string]string) error {
 	if p.serviceAccount.TokenURI == "" {
 		p.serviceAccount.TokenURI = googleDefaultTokenURL
 	}
-	if p.client == nil {
-		p.client = providerhttp.NewClient()
+	if err := applyHTTPClient(&p.client, config); err != nil {
+		return err
 	}
 	if p.now == nil {
 		p.now = func() time.Time { return time.Now().UTC() }
@@ -186,11 +186,90 @@ func (p *googleProvider) ListRecordLines(context.Context, dns.Zone) ([]dns.Recor
 
 func (p *googleProvider) CreateRecord(ctx context.Context, zone dns.Zone, input dns.RecordInput) (dns.Record, error) {
 	record := googleRecordFromInput(zone, input)
+	sets, err := p.listRRSets(ctx, zone)
+	if err != nil {
+		return dns.Record{}, err
+	}
+	for _, current := range sets {
+		if !googleSameRRSetKey(current, record) {
+			continue
+		}
+		var added bool
+		current.RRDatas, added = appendUniqueRecordValue(current.RRDatas, record.RRDatas[0])
+		if added {
+			body := map[string]any{"deletions": []googleRRSet{currentWithValues(current, current.RRDatas[:len(current.RRDatas)-1])}, "additions": []googleRRSet{current}}
+			if err := p.doJSON(ctx, http.MethodPost, "/projects/"+url.PathEscape(p.projectID)+"/managedZones/"+url.PathEscape(zone.ID)+"/changes", nil, body, nil, "create_record"); err != nil {
+				return dns.Record{}, err
+			}
+		}
+		return googleInputToDomain(current, input, zone.Domain), nil
+	}
 	body := map[string]any{"additions": []googleRRSet{record}}
 	if err := p.doJSON(ctx, http.MethodPost, "/projects/"+url.PathEscape(p.projectID)+"/managedZones/"+url.PathEscape(zone.ID)+"/changes", nil, body, nil, "create_record"); err != nil {
 		return dns.Record{}, err
 	}
 	return googleRecordToDomain(record, zone.Domain), nil
+}
+
+func (p *googleProvider) UpdateRecordValue(ctx context.Context, zone dns.Zone, remoteID string, oldInput dns.RecordInput, nextInput dns.RecordInput) (dns.Record, error) {
+	current, err := p.findRecord(ctx, zone, remoteID)
+	if err != nil {
+		return dns.Record{}, err
+	}
+	next := googleRecordFromInput(zone, nextInput)
+	oldValue := googleFormatValue(oldInput.Type, oldInput.Value)
+	deletions := []googleRRSet{current}
+	additions := []googleRRSet{}
+	if googleSameRRSetKey(current, next) {
+		values, ok := replaceRecordValue(current.RRDatas, oldValue, next.RRDatas[0])
+		if !ok {
+			return dns.Record{}, &dns.ProviderError{Provider: p.Key(), Operation: "update_record", Message: "record value not found or already exists"}
+		}
+		next = currentWithValues(current, values)
+		additions = append(additions, next)
+	} else {
+		remaining, ok := removeRecordValue(current.RRDatas, oldValue)
+		if !ok {
+			return dns.Record{}, &dns.ProviderError{Provider: p.Key(), Operation: "update_record", Message: "record value not found"}
+		}
+		if len(remaining) > 0 {
+			additions = append(additions, currentWithValues(current, remaining))
+		}
+		sets, err := p.listRRSets(ctx, zone)
+		if err != nil {
+			return dns.Record{}, err
+		}
+		for _, target := range sets {
+			if googleSameRRSetKey(target, next) {
+				deletions = append(deletions, target)
+				target.RRDatas, _ = appendUniqueRecordValue(target.RRDatas, next.RRDatas[0])
+				next = target
+				break
+			}
+		}
+		additions = append(additions, next)
+	}
+	body := map[string]any{"deletions": deletions, "additions": additions}
+	if err := p.doJSON(ctx, http.MethodPost, "/projects/"+url.PathEscape(p.projectID)+"/managedZones/"+url.PathEscape(zone.ID)+"/changes", nil, body, nil, "update_record"); err != nil {
+		return dns.Record{}, err
+	}
+	return googleInputToDomain(next, nextInput, zone.Domain), nil
+}
+
+func (p *googleProvider) DeleteRecordValue(ctx context.Context, zone dns.Zone, remoteID string, input dns.RecordInput) error {
+	current, err := p.findRecord(ctx, zone, remoteID)
+	if err != nil {
+		return err
+	}
+	remaining, ok := removeRecordValue(current.RRDatas, googleFormatValue(input.Type, input.Value))
+	if !ok {
+		return &dns.ProviderError{Provider: p.Key(), Operation: "delete_record", Message: "record value not found", NotFound: true}
+	}
+	body := map[string]any{"deletions": []googleRRSet{current}}
+	if len(remaining) > 0 {
+		body["additions"] = []googleRRSet{currentWithValues(current, remaining)}
+	}
+	return p.doJSON(ctx, http.MethodPost, "/projects/"+url.PathEscape(p.projectID)+"/managedZones/"+url.PathEscape(zone.ID)+"/changes", nil, body, nil, "delete_record")
 }
 
 func (p *googleProvider) UpdateRecord(ctx context.Context, zone dns.Zone, remoteID string, input dns.RecordInput) (dns.Record, error) {
@@ -229,9 +308,27 @@ func (p *googleProvider) ListRecords(ctx context.Context, zone dns.Zone) ([]dns.
 	}
 	records := make([]dns.Record, 0, len(sets))
 	for _, set := range sets {
-		records = append(records, googleRecordToDomain(set, zone.Domain))
+		for _, value := range set.RRDatas {
+			records = append(records, googleRecordToDomain(currentWithValues(set, []string{value}), zone.Domain))
+		}
 	}
 	return records, nil
+}
+
+func googleSameRRSetKey(a googleRRSet, b googleRRSet) bool {
+	return strings.EqualFold(strings.TrimSpace(a.Name), strings.TrimSpace(b.Name)) &&
+		strings.EqualFold(strings.TrimSpace(a.Type), strings.TrimSpace(b.Type))
+}
+
+func currentWithValues(record googleRRSet, values []string) googleRRSet {
+	record.RRDatas = append([]string(nil), values...)
+	return record
+}
+
+func googleInputToDomain(record googleRRSet, input dns.RecordInput, domain string) dns.Record {
+	result := googleRecordToDomain(record, domain)
+	result.Value = googleDisplayValue(strings.ToUpper(strings.TrimSpace(input.Type)), googleFormatValue(input.Type, input.Value))
+	return result
 }
 
 func (p *googleProvider) listRRSets(ctx context.Context, zone dns.Zone) ([]googleRRSet, error) {
@@ -270,7 +367,7 @@ func (p *googleProvider) findRecord(ctx context.Context, zone dns.Zone, remoteID
 			return record, nil
 		}
 	}
-	return googleRRSet{}, &dns.ProviderError{Provider: p.Key(), Operation: "get_record", Message: "record not found"}
+	return googleRRSet{}, &dns.ProviderError{Provider: p.Key(), Operation: "get_record", Message: "record not found", NotFound: true}
 }
 
 func (p *googleProvider) doJSON(ctx context.Context, method string, path string, query map[string]string, body any, out any, operation string) error {
@@ -310,7 +407,7 @@ func (p *googleProvider) doJSON(ctx context.Context, method string, path string,
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		var errorBody googleChangeResponse
 		_ = json.Unmarshal(data, &errorBody)
-		return &dns.ProviderError{Provider: p.Key(), Operation: operation, Message: googleErrorMessage(resp.StatusCode, errorBody)}
+		return &dns.ProviderError{Provider: p.Key(), Operation: operation, StatusCode: resp.StatusCode, Message: googleErrorMessage(resp.StatusCode, errorBody)}
 	}
 	if out != nil && len(data) > 0 {
 		if err := json.Unmarshal(data, out); err != nil {
@@ -354,7 +451,7 @@ func (p *googleProvider) getAccessToken(ctx context.Context, operation string) (
 	var token googleTokenResponse
 	_ = json.Unmarshal(data, &token)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 || strings.TrimSpace(token.AccessToken) == "" {
-		return "", &dns.ProviderError{Provider: p.Key(), Operation: operation, Message: googleTokenErrorMessage(resp.StatusCode, token)}
+		return "", &dns.ProviderError{Provider: p.Key(), Operation: operation, StatusCode: resp.StatusCode, Message: googleTokenErrorMessage(resp.StatusCode, token)}
 	}
 	expiresIn := token.ExpiresIn
 	if expiresIn <= 0 {

@@ -66,10 +66,10 @@ func (p *westProvider) Label() string {
 }
 
 func (p *westProvider) ConfigFields() []dns.ConfigField {
-	return []dns.ConfigField{
-		{Name: "Username", Label: "Username", Required: true},
-		{Name: "ApiPassword", Label: "ApiPassword", Required: true, Secret: true},
-	}
+	return withProxyField(
+		dns.ConfigField{Name: "Username", Label: "Username", Required: true},
+		dns.ConfigField{Name: "ApiPassword", Label: "ApiPassword", Required: true, Secret: true},
+	)
 }
 
 func (p *westProvider) Configure(config map[string]string) error {
@@ -81,8 +81,8 @@ func (p *westProvider) Configure(config map[string]string) error {
 	if p.baseURL == "" {
 		p.baseURL = westDefaultBaseURL
 	}
-	if p.client == nil {
-		p.client = providerhttp.NewClient()
+	if err := applyHTTPClient(&p.client, config); err != nil {
+		return err
 	}
 	if p.nowMS == nil {
 		p.nowMS = func() int64 { return time.Now().UnixMilli() }
@@ -174,7 +174,7 @@ func (p *westProvider) GetRecord(ctx context.Context, zone dns.Zone, remoteID st
 			return record, nil
 		}
 	}
-	return dns.Record{}, &dns.ProviderError{Provider: p.Key(), Operation: "get_record", Message: "record not found"}
+	return dns.Record{}, &dns.ProviderError{Provider: p.Key(), Operation: "get_record", Message: "record not found", NotFound: true}
 }
 
 func (p *westProvider) ListRecords(ctx context.Context, zone dns.Zone) ([]dns.Record, error) {
@@ -246,7 +246,7 @@ func (p *westProvider) doRequest(ctx context.Context, method string, action stri
 		return westResponse{}, &dns.ProviderError{Provider: p.Key(), Operation: operation, Message: "decode response failed"}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 || ret.Result != 200 {
-		return westResponse{}, &dns.ProviderError{Provider: p.Key(), Operation: operation, Message: westErrorMessage(resp.StatusCode, ret.Msg)}
+		return westResponse{}, &dns.ProviderError{Provider: p.Key(), Operation: operation, StatusCode: resp.StatusCode, Message: westErrorMessage(resp.StatusCode, ret.Msg)}
 	}
 	return ret, nil
 }

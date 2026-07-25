@@ -65,10 +65,6 @@ func (r *AdminRepository) ListDomainsPage(ctx context.Context, filter DomainAdmi
 	return r.domains.ListDomainsPage(ctx, filter, page)
 }
 
-func (r *AdminRepository) StoredProviders(ctx context.Context) (map[string]bool, error) {
-	return r.domains.StoredProviders(ctx)
-}
-
 func (r *AdminRepository) FindDomainConflict(ctx context.Context, input DomainWrite) (DomainConflict, bool, error) {
 	return r.domains.FindDomainConflict(ctx, input)
 }
@@ -77,12 +73,12 @@ func (r *AdminRepository) UpsertDomain(ctx context.Context, input DomainWrite) (
 	return r.domains.UpsertDomain(ctx, input)
 }
 
-func (r *AdminRepository) DomainProviderConfig(ctx context.Context, id int64) (DomainProviderConfig, error) {
-	return r.domains.DomainProviderConfig(ctx, id)
-}
-
 func (r *AdminRepository) DeleteDomain(ctx context.Context, id int64) (bool, error) {
 	return r.domains.DeleteDomain(ctx, id)
+}
+
+func (r *AdminRepository) ProviderConfigs() *ProviderConfigsRepository {
+	return NewProviderConfigsRepository(r.DB)
 }
 
 // --- Log delegation ---

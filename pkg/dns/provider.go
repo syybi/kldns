@@ -29,6 +29,14 @@ type RecordManager interface {
 	ListRecords(ctx context.Context, zone Zone) ([]Record, error)
 }
 
+// RecordValueManager is implemented by providers whose API stores all values
+// for one name and type as a single remote RRset. It lets the service update or
+// delete one value without replacing or deleting its sibling values.
+type RecordValueManager interface {
+	UpdateRecordValue(ctx context.Context, zone Zone, remoteID string, oldInput RecordInput, nextInput RecordInput) (Record, error)
+	DeleteRecordValue(ctx context.Context, zone Zone, remoteID string, input RecordInput) error
+}
+
 type ConfigField struct {
 	Name        string `json:"name"`
 	Label       string `json:"label"`

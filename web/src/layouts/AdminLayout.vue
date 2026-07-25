@@ -44,6 +44,9 @@
           <el-menu-item index="/admin/domains">
             <span>主域管理</span>
           </el-menu-item>
+          <el-menu-item index="/admin/provider-configs">
+            <span>平台配置</span>
+          </el-menu-item>
           <el-menu-item index="/admin/subdomains">
             <span>二级域名</span>
           </el-menu-item>
@@ -109,7 +112,7 @@ const route = useRoute()
 const auth = useAuthStore()
 const menuOpen = ref(false)
 const userMenuPaths = ['/admin/users', '/admin/groups', '/admin/points']
-const domainMenuPaths = ['/admin/domains', '/admin/subdomains', '/admin/records', '/admin/providers']
+const domainMenuPaths = ['/admin/domains', '/admin/provider-configs', '/admin/subdomains', '/admin/records', '/admin/providers']
 const activeMenu = computed(() => (route.path === '/admin/' ? '/admin' : route.path))
 const openMenus = computed(() => {
   if (userMenuPaths.some((path) => route.path.startsWith(path))) return ['users']

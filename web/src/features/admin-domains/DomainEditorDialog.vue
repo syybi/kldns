@@ -13,14 +13,34 @@
           <h3>DNS 接入</h3>
         </div>
         <div class="form-grid two-columns">
-          <el-form-item label="DNS 平台">
-            <el-select v-model="form.provider_key" class="full-control" @change="handleProviderChange">
-              <el-option v-for="provider in providers" :key="provider.key" :label="provider.label" :value="provider.key" />
+          <el-form-item label="平台配置">
+            <el-select
+              v-model="form.provider_config_id"
+              class="full-control"
+              filterable
+              placeholder="请选择平台配置"
+              @change="handleConfigChange"
+            >
+              <el-option
+                v-for="config in providerConfigs"
+                :key="config.id"
+                :label="configOptionLabel(config)"
+                :value="config.id"
+                :disabled="!config.config_stored"
+              />
             </el-select>
           </el-form-item>
           <el-form-item label="平台域名">
             <el-input v-if="form.id && form.domain" :model-value="form.domain" class="full-control" readonly />
-            <el-select v-else v-model="selectedZone" class="full-control" filterable placeholder="先获取平台域名列表" :disabled="zoneOptions.length === 0" @change="selectZone">
+            <el-select
+              v-else
+              v-model="selectedZone"
+              class="full-control"
+              filterable
+              placeholder="先获取平台域名列表"
+              :disabled="zoneOptions.length === 0"
+              @change="selectZone"
+            >
               <el-option v-for="zone in zoneOptions" :key="zoneValue(zone)" :label="zone.domain" :value="zoneValue(zone)">
                 <span>{{ zone.domain }}</span>
                 <small class="zone-id">{{ zone.id }}</small>
@@ -28,27 +48,27 @@
             </el-select>
           </el-form-item>
         </div>
-        <div v-if="currentProvider" class="provider-config-panel">
+        <div class="provider-config-panel">
           <div class="subsection-title">
-            <strong>DNS 配置信息</strong>
-            <span>{{ currentProvider.label }}</span>
+            <strong>当前配置</strong>
+            <span>{{ selectedConfigLabel }}</span>
           </div>
-          <el-alert v-if="form.id" type="info" show-icon :closable="false" title="不填写新密钥时会保留当前域名已保存的 DNS 配置。" />
-          <div class="config-grid">
-            <el-form-item v-for="field in currentProvider.fields" :key="field.name" :label="fieldLabel(field)">
-              <el-input
-                v-model="form.provider_config[field.name]"
-                class="full-control"
-                :type="field.secret ? 'password' : 'text'"
-                :show-password="field.secret"
-                :placeholder="configPlaceholder(field)"
-                autocomplete="off"
-              />
-              <p v-if="field.description" class="field-tip">{{ field.description }}</p>
-            </el-form-item>
-          </div>
+          <el-alert
+            v-if="providerConfigs.length === 0"
+            type="warning"
+            show-icon
+            :closable="false"
+            title="请先在「平台配置」中添加 DNS 平台密钥，再回来选择并添加主域。"
+          />
+          <el-alert
+            v-else-if="selectedConfig && !selectedConfig.config_stored"
+            type="warning"
+            show-icon
+            :closable="false"
+            title="所选配置尚未保存密钥，请先完善平台配置。"
+          />
           <div class="zone-actions">
-            <el-button type="primary" :loading="zonesLoading" @click="loadZones">获取平台域名</el-button>
+            <el-button type="primary" :loading="zonesLoading" :disabled="!canLoadZones" @click="loadZones">获取平台域名</el-button>
             <span v-if="zoneOptions.length">已获取 {{ zoneOptions.length }} 个域名</span>
             <span v-else>保存前必须从平台域名列表中选择主域。</span>
           </div>
@@ -113,7 +133,7 @@ import {
   saveAdminDomain,
   type AdminDomain,
   type AdminGroup,
-  type ProviderField,
+  type AdminProviderConfig,
   type ProviderSummary,
   type ProviderZone,
 } from '../../api/admin'
@@ -131,12 +151,9 @@ const dialogVisible = ref(false)
 const selectedZone = ref('')
 const zoneOptions = ref<ProviderZone[]>([])
 const selectedGroups = ref<number[]>([0])
-const editingProviderKey = ref('')
-const editingConfigStored = ref(false)
 const form = reactive({
   id: 0,
-  provider_key: '',
-  provider_config: {} as Record<string, string>,
+  provider_config_id: 0,
   remote_zone_id: '',
   domain: '',
   group_policy: '0',
@@ -149,26 +166,23 @@ const form = reactive({
 
 const props = defineProps<{
   providers: ProviderSummary[]
+  providerConfigs: AdminProviderConfig[]
   groups: AdminGroup[]
 }>()
 
-const currentProvider = computed(() => props.providers.find((provider) => provider.key === form.provider_key))
-const providerConfigRequired = computed(() => {
-  if (!form.id) return true
-  if (form.provider_key !== editingProviderKey.value) return true
-  if (!editingConfigStored.value) return true
-  return hasProviderConfigInput()
+const selectedConfig = computed(() => props.providerConfigs.find((item) => item.id === form.provider_config_id))
+const selectedConfigLabel = computed(() => {
+  if (!selectedConfig.value) return '未选择'
+  return configOptionLabel(selectedConfig.value)
 })
+const canLoadZones = computed(() => Boolean(selectedConfig.value?.config_stored))
 
 watch(selectedGroups, syncGroupPolicyFromSelection)
 
 function openCreate() {
-  editingProviderKey.value = ''
-  editingConfigStored.value = false
   Object.assign(form, {
     id: 0,
-    provider_key: props.providers[0]?.key || '',
-    provider_config: {},
+    provider_config_id: firstUsableConfigID(),
     remote_zone_id: '',
     domain: '',
     group_policy: '0',
@@ -179,24 +193,31 @@ function openCreate() {
     description: '',
   })
   selectedGroups.value = [0]
-  resetProviderConfig()
   resetZones()
   dialogVisible.value = true
 }
 
 function openEdit(row: AdminDomain) {
-  editingProviderKey.value = row.provider_key
-  editingConfigStored.value = row.provider_config_stored
-  Object.assign(form, { ...row, provider_config: {}, record_types: row.record_types.split(',').filter(Boolean) })
+  Object.assign(form, {
+    id: row.id,
+    provider_config_id: row.provider_config_id,
+    remote_zone_id: row.remote_zone_id,
+    domain: row.domain,
+    group_policy: row.group_policy,
+    record_types: row.record_types.split(',').filter(Boolean),
+    beian: row.beian,
+    points_cost: row.points_cost,
+    require_review: row.require_review,
+    description: row.description,
+  })
   selectedGroups.value = parseGroupPolicy(row.group_policy)
-  resetProviderConfig()
   setCurrentZone(row.remote_zone_id, row.domain)
   dialogVisible.value = true
 }
 
 async function save() {
   syncGroupPolicyFromSelection()
-  if (!form.provider_key || !form.remote_zone_id || !form.domain) {
+  if (!form.provider_config_id || !form.remote_zone_id || !form.domain) {
     ElMessage.warning('请完整填写主域信息')
     return
   }
@@ -204,20 +225,24 @@ async function save() {
     ElMessage.warning('请从平台域名列表中选择主域')
     return
   }
-  if (!currentProvider.value) {
-    ElMessage.warning('请选择支持的 DNS 平台')
+  if (!selectedConfig.value?.config_stored) {
+    ElMessage.warning('请选择已保存密钥的平台配置')
     return
-  }
-  if (providerConfigRequired.value) {
-    const missing = currentProvider.value.fields.find((field) => field.required && !form.provider_config[field.name]?.trim())
-    if (missing) {
-      ElMessage.warning(`请填写 ${missing.label}`)
-      return
-    }
   }
   saving.value = true
   try {
-    await saveAdminDomain({ ...form, provider_config: { ...form.provider_config } })
+    await saveAdminDomain({
+      id: form.id || undefined,
+      provider_config_id: form.provider_config_id,
+      remote_zone_id: form.remote_zone_id,
+      domain: form.domain,
+      group_policy: form.group_policy,
+      record_types: form.record_types,
+      beian: form.beian,
+      points_cost: form.points_cost,
+      require_review: form.require_review,
+      description: form.description,
+    })
     ElMessage.success('主域已保存')
     dialogVisible.value = false
     emit('saved')
@@ -228,15 +253,7 @@ async function save() {
   }
 }
 
-function resetProviderConfig() {
-  for (const key of Object.keys(form.provider_config)) delete form.provider_config[key]
-  for (const field of currentProvider.value?.fields || []) {
-    form.provider_config[field.name] = ''
-  }
-}
-
-function handleProviderChange() {
-  resetProviderConfig()
+function handleConfigChange() {
   resetZones()
 }
 
@@ -254,18 +271,14 @@ function setCurrentZone(remoteZoneID: string, domain: string) {
 }
 
 async function loadZones() {
-  if (!currentProvider.value) {
-    ElMessage.warning('请选择 DNS 平台')
+  if (!selectedConfig.value) {
+    ElMessage.warning('请选择平台配置')
     return
   }
-  if (providerConfigRequired.value) {
-    const missing = currentProvider.value.fields.find((field) => field.required && !form.provider_config[field.name]?.trim())
-    if (missing) {
-      ElMessage.warning(`请填写 ${missing.label}`)
-      return
-    }
+  if (!selectedConfig.value.config_stored) {
+    ElMessage.warning('所选平台配置尚未保存密钥')
+    return
   }
-  const configSnapshot = { ...form.provider_config }
   const selectedSnapshot = {
     zone: selectedZone.value,
     options: [...zoneOptions.value],
@@ -275,14 +288,12 @@ async function loadZones() {
   zonesLoading.value = true
   try {
     const response = await listProviderZones({
-      key: form.provider_key,
-      config: { ...form.provider_config },
-      domain_id: form.id || undefined,
+      key: selectedConfig.value.provider_key,
+      provider_config_id: selectedConfig.value.id,
     })
     zoneOptions.value = response.data
     if (zoneOptions.value.length === 0) {
       restoreZoneSelection(selectedSnapshot)
-      restoreProviderConfig(configSnapshot)
       ElMessage.warning('平台账号下没有可选择的域名')
       return
     }
@@ -290,7 +301,6 @@ async function loadZones() {
     selectZone(zoneValue(current || zoneOptions.value[0]))
   } catch (error) {
     restoreZoneSelection(selectedSnapshot)
-    restoreProviderConfig(configSnapshot)
     ElMessage.error(apiErrorMessage(error, '获取平台域名失败，请检查 DNS 配置'))
   } finally {
     zonesLoading.value = false
@@ -302,11 +312,6 @@ function restoreZoneSelection(snapshot: { zone: string; options: ProviderZone[];
   zoneOptions.value = snapshot.options
   form.remote_zone_id = snapshot.remoteZoneID
   form.domain = snapshot.domain
-}
-
-function restoreProviderConfig(snapshot: Record<string, string>) {
-  for (const key of Object.keys(form.provider_config)) delete form.provider_config[key]
-  for (const [key, value] of Object.entries(snapshot)) form.provider_config[key] = value
 }
 
 function selectZone(value: string) {
@@ -321,17 +326,14 @@ function zoneValue(zone: ProviderZone) {
   return `${zone.id}@@${zone.domain}`
 }
 
-function hasProviderConfigInput() {
-  return Object.values(form.provider_config).some((value) => value.trim() !== '')
+function firstUsableConfigID() {
+  return props.providerConfigs.find((item) => item.config_stored)?.id || props.providerConfigs[0]?.id || 0
 }
 
-function fieldLabel(field: ProviderField) {
-  return field.required ? `${field.label} *` : field.label
-}
-
-function configPlaceholder(field: ProviderField) {
-  if (form.id) return field.secret ? '留空保留已保存密钥' : '留空保留已保存配置'
-  return field.description || field.label
+function configOptionLabel(config: AdminProviderConfig) {
+  const provider = props.providers.find((item) => item.key === config.provider_key)
+  const label = provider?.label || config.provider_key
+  return `${config.name}（${label}）`
 }
 
 function parseGroupPolicy(policy: string) {
@@ -492,21 +494,8 @@ defineExpose({ openCreate, openEdit })
   gap: 12px;
 }
 
-.config-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px 18px;
-}
-
 .two-columns {
   grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.field-tip {
-  margin: 6px 0 0;
-  color: #64748b;
-  font-size: 12px;
-  line-height: 1.5;
 }
 
 .zone-id {
@@ -574,7 +563,6 @@ defineExpose({ openCreate, openEdit })
 }
 
 @media (max-width: 720px) {
-  .config-grid,
   .form-grid,
   .two-columns {
     grid-template-columns: 1fr;

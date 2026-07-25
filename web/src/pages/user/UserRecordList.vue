@@ -141,7 +141,7 @@ const policyNote = computed(() =>
     ? '选择已注册二级域名，维护其解析记录。'
     : '选择已注册域名，维护该域名本身不同解析类型的记录。',
 )
-const hostPlaceholder = computed(() => (dnsPolicy.unlimitedSubdomainRecords ? '@ 或 www' : '@'))
+const hostPlaceholder = computed(() => (dnsPolicy.unlimitedSubdomainRecords ? '@、* 或 www' : '@'))
 const pagedRecords = computed(() => records.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value))
 
 watch(pageSize, () => {

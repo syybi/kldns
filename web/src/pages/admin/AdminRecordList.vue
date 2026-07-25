@@ -85,6 +85,7 @@
         <div class="record-form-grid">
           <el-form-item label="所属用户">
             <el-select v-model="form.uid" :disabled="Boolean(editing)" class="full-control" placeholder="请选择用户">
+              <el-option v-if="editing?.uid === 0" :label="editing.username || 'system-sync'" :value="0" />
               <el-option v-for="user in users" :key="user.id" :label="`${user.username}（${statusText(user.status)}）`" :value="user.id" />
             </el-select>
           </el-form-item>
@@ -94,7 +95,7 @@
             </el-select>
           </el-form-item>
           <el-form-item label="主机记录">
-            <el-input v-model="form.name" placeholder="@ 或 www" />
+            <el-input v-model="form.name" placeholder="@、* 或 www" />
           </el-form-item>
           <el-form-item label="解析类型">
             <el-select v-model="form.type" class="full-control">
@@ -225,7 +226,7 @@ function openEdit(row: RecordItem) {
   Object.assign(form, {
     uid: row.uid || 0,
     did: row.did,
-    name: row.name,
+    name: editableHostName(row),
     type: row.type,
     value: row.value,
     line_id: row.line_id || '0',
@@ -241,7 +242,8 @@ function syncDomainForm() {
 }
 
 async function save() {
-  if (!form.uid || !form.did || !form.name.trim() || !form.type || !form.value.trim()) {
+  const hostName = form.name.trim()
+  if ((!editing.value && (!form.uid || !form.did)) || !hostName || !form.type || !form.value.trim()) {
     ElMessage.warning('请完整填写解析记录')
     return
   }
@@ -251,7 +253,7 @@ async function save() {
       id: editing.value?.id,
       uid: form.uid,
       did: form.did,
-      name: form.name.trim(),
+      name: hostName,
       type: form.type,
       value: form.value.trim(),
       line_id: form.line_id,
@@ -317,6 +319,10 @@ function lineOptions(record?: RecordItem | null): LineOption[] {
     options.push({ id: record.line_id, name: record.line || record.line_id })
   }
   return options
+}
+
+function editableHostName(record: RecordItem) {
+  return record.name || record.host || '@'
 }
 
 function domainName(did: number) {

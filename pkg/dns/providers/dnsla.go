@@ -93,10 +93,10 @@ func (p *dnslaProvider) Label() string {
 }
 
 func (p *dnslaProvider) ConfigFields() []dns.ConfigField {
-	return []dns.ConfigField{
-		{Name: "ApiId", Label: "ApiId", Required: true, Secret: true},
-		{Name: "ApiSecret", Label: "ApiSecret", Required: true, Secret: true},
-	}
+	return withProxyField(
+		dns.ConfigField{Name: "ApiId", Label: "ApiId", Required: true, Secret: true},
+		dns.ConfigField{Name: "ApiSecret", Label: "ApiSecret", Required: true, Secret: true},
+	)
 }
 
 func (p *dnslaProvider) Configure(config map[string]string) error {
@@ -106,10 +106,7 @@ func (p *dnslaProvider) Configure(config map[string]string) error {
 		p.apiSecret = strings.TrimSpace(config["ApiKey"])
 	}
 	p.baseURL = providerhttp.NormalizeBaseURL(config["BaseURL"], dnslaDefaultBaseURL, false)
-	if p.client == nil {
-		p.client = providerhttp.NewClient()
-	}
-	return nil
+	return applyHTTPClient(&p.client, config)
 }
 
 func (p *dnslaProvider) Check(ctx context.Context) error {
@@ -249,7 +246,7 @@ func (p *dnslaProvider) GetRecord(ctx context.Context, zone dns.Zone, remoteID s
 			return record, nil
 		}
 	}
-	return dns.Record{}, &dns.ProviderError{Provider: p.Key(), Operation: "get_record", Message: "record not found"}
+	return dns.Record{}, &dns.ProviderError{Provider: p.Key(), Operation: "get_record", Message: "record not found", NotFound: true}
 }
 
 func (p *dnslaProvider) ListRecords(ctx context.Context, zone dns.Zone) ([]dns.Record, error) {
@@ -316,7 +313,7 @@ func (p *dnslaProvider) doJSON(ctx context.Context, method string, path string, 
 		return &dns.ProviderError{Provider: p.Key(), Operation: operation, Message: "decode response failed"}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 || ret.Code != 200 {
-		return &dns.ProviderError{Provider: p.Key(), Operation: operation, Message: dnslaErrorMessage(resp.StatusCode, ret.Msg)}
+		return &dns.ProviderError{Provider: p.Key(), Operation: operation, StatusCode: resp.StatusCode, Message: dnslaErrorMessage(resp.StatusCode, ret.Msg)}
 	}
 	if out != nil && len(ret.Data) > 0 && string(ret.Data) != "null" {
 		if err := json.Unmarshal(ret.Data, out); err != nil {

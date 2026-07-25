@@ -71,20 +71,17 @@ func (p *dnspodProvider) Label() string {
 }
 
 func (p *dnspodProvider) ConfigFields() []dns.ConfigField {
-	return []dns.ConfigField{
-		{Name: "ID", Label: "ID", Required: true, Secret: true, Description: "DNSPod Token ID"},
-		{Name: "Token", Label: "Token", Required: true, Secret: true, Description: "DNSPod Token"},
-	}
+	return withProxyField(
+		dns.ConfigField{Name: "ID", Label: "ID", Required: true, Secret: true, Description: "DNSPod Token ID"},
+		dns.ConfigField{Name: "Token", Label: "Token", Required: true, Secret: true, Description: "DNSPod Token"},
+	)
 }
 
 func (p *dnspodProvider) Configure(config map[string]string) error {
 	p.id = strings.TrimSpace(config["ID"])
 	p.token = strings.TrimSpace(config["Token"])
 	p.baseURL = providerhttp.NormalizeBaseURL(config["BaseURL"], dnspodDefaultBaseURL, true)
-	if p.client == nil {
-		p.client = providerhttp.NewClient()
-	}
-	return nil
+	return applyHTTPClient(&p.client, config)
 }
 
 func (p *dnspodProvider) Check(ctx context.Context) error {
@@ -253,7 +250,7 @@ func (p *dnspodProvider) doForm(ctx context.Context, action string, params url.V
 		return dnspodResponse{}, &dns.ProviderError{Provider: p.Key(), Operation: operation, Message: "decode response failed"}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 || rawString(ret.Status.Code) != "1" {
-		return dnspodResponse{}, &dns.ProviderError{Provider: p.Key(), Operation: operation, Message: dnspodErrorMessage(resp.StatusCode, ret.Status.Message)}
+		return dnspodResponse{}, &dns.ProviderError{Provider: p.Key(), Operation: operation, StatusCode: resp.StatusCode, Message: dnspodErrorMessage(resp.StatusCode, ret.Status.Message)}
 	}
 	return ret, nil
 }

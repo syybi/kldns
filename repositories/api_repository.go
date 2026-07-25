@@ -41,6 +41,7 @@ type DomainSummary struct {
 	RequireReview            int              `json:"require_review"`
 	Line                     []dns.RecordLine `json:"line"`
 	ProviderKey              string           `json:"-"`
+	ProviderConfigID         int64            `json:"-"`
 	ProviderConfigCiphertext string           `json:"-"`
 	RemoteZoneID             string           `json:"-"`
 }
@@ -193,16 +194,17 @@ func (r *APIRepository) CreateSession(ctx context.Context, uid int64, tokenHash 
 }
 
 func (r *APIRepository) ListAvailableDomains(ctx context.Context, gid int64, filter DomainFilter) ([]DomainSummary, error) {
-	query := `SELECT id, domain, points_cost, COALESCE(description, ''), record_types, beian, require_review,
-			provider_key, COALESCE(provider_config_ciphertext, ''), remote_zone_id
-		FROM domains
-		WHERE (group_policy = '0' OR instr(',' || group_policy || ',', ',' || ? || ',') > 0)`
+	query := `SELECT d.id, d.domain, d.points_cost, COALESCE(d.description, ''), d.record_types, d.beian, d.require_review,
+			d.provider_key, d.provider_config_id, COALESCE(pc.config_ciphertext, ''), d.remote_zone_id
+		FROM domains d
+		JOIN provider_configs pc ON pc.id = d.provider_config_id
+		WHERE (d.group_policy = '0' OR instr(',' || d.group_policy || ',', ',' || ? || ',') > 0)`
 	args := []any{gid}
 	if term := likeTerm(filter.Keyword); term != "" {
-		query += ` AND lower(domain) LIKE ?`
+		query += ` AND lower(d.domain) LIKE ?`
 		args = append(args, term)
 	}
-	query += ` ORDER BY id DESC`
+	query += ` ORDER BY d.id DESC`
 	rows, err := r.DB.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -212,7 +214,7 @@ func (r *APIRepository) ListAvailableDomains(ctx context.Context, gid int64, fil
 	for rows.Next() {
 		var item DomainSummary
 		var recordTypes string
-		if err := rows.Scan(&item.ID, &item.Domain, &item.PointsCost, &item.Description, &recordTypes, &item.Beian, &item.RequireReview, &item.ProviderKey, &item.ProviderConfigCiphertext, &item.RemoteZoneID); err != nil {
+		if err := rows.Scan(&item.ID, &item.Domain, &item.PointsCost, &item.Description, &recordTypes, &item.Beian, &item.RequireReview, &item.ProviderKey, &item.ProviderConfigID, &item.ProviderConfigCiphertext, &item.RemoteZoneID); err != nil {
 			return nil, err
 		}
 		item.RegistrationCost = item.PointsCost

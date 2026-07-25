@@ -95,11 +95,11 @@ func TestGoogleProviderRecordLifecycle(t *testing.T) {
 	if len(records) != 2 || records[0].Name != "www" || records[0].Value != "1.1.1.1" {
 		t.Fatalf("unexpected records: %#v", records)
 	}
-	created, err := provider.CreateRecord(context.Background(), zones[0], dns.RecordInput{Name: "api", Type: "A", Value: "2.2.2.2"})
+	created, err := provider.CreateRecord(context.Background(), zones[0], dns.RecordInput{Name: "api", Type: "A", Value: "3.3.3.3"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.RemoteID == "" || created.Name != "api" {
+	if created.RemoteID == "" || created.Name != "api" || created.Value != "3.3.3.3" {
 		t.Fatalf("unexpected created: %#v", created)
 	}
 	updated, err := provider.UpdateRecord(context.Background(), zones[0], records[1].RemoteID, dns.RecordInput{Name: "mail", Type: "MX", Value: "mail.example.com"})
@@ -122,7 +122,7 @@ func TestGoogleProviderRecordLifecycle(t *testing.T) {
 	if tokenRequests != 1 {
 		t.Fatalf("expected cached access token, got %d token requests", tokenRequests)
 	}
-	if strings.Join(requests, ",") != "POST /token,GET /dns/v1/projects/project-1/managedZones,GET /dns/v1/projects/project-1/managedZones,GET /dns/v1/projects/project-1/managedZones/zone-1/rrsets,POST /dns/v1/projects/project-1/managedZones/zone-1/changes,GET /dns/v1/projects/project-1/managedZones/zone-1/rrsets,POST /dns/v1/projects/project-1/managedZones/zone-1/changes,GET /dns/v1/projects/project-1/managedZones/zone-1/rrsets,GET /dns/v1/projects/project-1/managedZones/zone-1/rrsets,POST /dns/v1/projects/project-1/managedZones/zone-1/changes" {
+	if strings.Join(requests, ",") != "POST /token,GET /dns/v1/projects/project-1/managedZones,GET /dns/v1/projects/project-1/managedZones,GET /dns/v1/projects/project-1/managedZones/zone-1/rrsets,GET /dns/v1/projects/project-1/managedZones/zone-1/rrsets,POST /dns/v1/projects/project-1/managedZones/zone-1/changes,GET /dns/v1/projects/project-1/managedZones/zone-1/rrsets,POST /dns/v1/projects/project-1/managedZones/zone-1/changes,GET /dns/v1/projects/project-1/managedZones/zone-1/rrsets,GET /dns/v1/projects/project-1/managedZones/zone-1/rrsets,POST /dns/v1/projects/project-1/managedZones/zone-1/changes" {
 		t.Fatalf("unexpected requests: %#v", requests)
 	}
 }

@@ -55,6 +55,7 @@ func enrichDomainLines(ctx context.Context, items []repositories.DomainSummary) 
 		provider, err := resolver.Resolve(ctx, models.Domain{
 			ID:                       items[i].ID,
 			ProviderKey:              items[i].ProviderKey,
+			ProviderConfigID:         items[i].ProviderConfigID,
 			ProviderConfigCiphertext: items[i].ProviderConfigCiphertext,
 			RemoteZoneID:             items[i].RemoteZoneID,
 			Domain:                   items[i].Domain,

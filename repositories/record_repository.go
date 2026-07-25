@@ -74,10 +74,11 @@ func (r *RecordRepository) GetDomainForGroup(ctx context.Context, did int64, gid
 		domain      models.Domain
 		recordTypes string
 	}
-	err := r.DB.QueryRowContext(ctx, `SELECT id, provider_key, COALESCE(provider_config_ciphertext, ''), remote_zone_id, domain, group_policy, record_types, beian, points_cost, require_review, COALESCE(description, '')
-		FROM domains
-		WHERE id = ? AND (group_policy = '0' OR instr(',' || group_policy || ',', ',' || ? || ',') > 0)`, did, gid).
-		Scan(&row.domain.ID, &row.domain.ProviderKey, &row.domain.ProviderConfigCiphertext, &row.domain.RemoteZoneID, &row.domain.Domain, &row.domain.GroupPolicy,
+	err := r.DB.QueryRowContext(ctx, `SELECT d.id, d.provider_key, d.provider_config_id, COALESCE(pc.config_ciphertext, ''), d.remote_zone_id, d.domain, d.group_policy, d.record_types, d.beian, d.points_cost, d.require_review, COALESCE(d.description, '')
+		FROM domains d
+		JOIN provider_configs pc ON pc.id = d.provider_config_id
+		WHERE d.id = ? AND (d.group_policy = '0' OR instr(',' || d.group_policy || ',', ',' || ? || ',') > 0)`, did, gid).
+		Scan(&row.domain.ID, &row.domain.ProviderKey, &row.domain.ProviderConfigID, &row.domain.ProviderConfigCiphertext, &row.domain.RemoteZoneID, &row.domain.Domain, &row.domain.GroupPolicy,
 			&row.recordTypes, &row.domain.Beian, &row.domain.PointsCost, &row.domain.RequireReview, &row.domain.Description)
 	if err != nil {
 		return models.Domain{}, err
@@ -96,9 +97,11 @@ func (r *RecordRepository) GetDomain(ctx context.Context, did int64) (models.Dom
 		domain      models.Domain
 		recordTypes string
 	}
-	err := r.DB.QueryRowContext(ctx, `SELECT id, provider_key, COALESCE(provider_config_ciphertext, ''), remote_zone_id, domain, group_policy, record_types, beian, points_cost, require_review, COALESCE(description, '')
-		FROM domains WHERE id = ?`, did).
-		Scan(&row.domain.ID, &row.domain.ProviderKey, &row.domain.ProviderConfigCiphertext, &row.domain.RemoteZoneID, &row.domain.Domain, &row.domain.GroupPolicy,
+	err := r.DB.QueryRowContext(ctx, `SELECT d.id, d.provider_key, d.provider_config_id, COALESCE(pc.config_ciphertext, ''), d.remote_zone_id, d.domain, d.group_policy, d.record_types, d.beian, d.points_cost, d.require_review, COALESCE(d.description, '')
+		FROM domains d
+		JOIN provider_configs pc ON pc.id = d.provider_config_id
+		WHERE d.id = ?`, did).
+		Scan(&row.domain.ID, &row.domain.ProviderKey, &row.domain.ProviderConfigID, &row.domain.ProviderConfigCiphertext, &row.domain.RemoteZoneID, &row.domain.Domain, &row.domain.GroupPolicy,
 			&row.recordTypes, &row.domain.Beian, &row.domain.PointsCost, &row.domain.RequireReview, &row.domain.Description)
 	if err != nil {
 		return models.Domain{}, err
@@ -201,10 +204,14 @@ func (r *RecordRepository) ListRecordsForDomain(ctx context.Context, did int64) 
 	return items, rows.Err()
 }
 
-func (r *RecordRepository) RecordNameExists(ctx context.Context, did int64, name string, recordType string, ignoreID int64) (bool, error) {
+func (r *RecordRepository) RecordConflictExists(ctx context.Context, did int64, name string, recordType string, value string, lineID string, ignoreID int64) (bool, error) {
 	recordType = strings.ToUpper(strings.TrimSpace(recordType))
-	query := `SELECT COUNT(1) FROM records WHERE did = ? AND name = ? AND (type = ? OR type = 'CNAME' OR ? = 'CNAME')`
-	args := []any{did, name, recordType, recordType}
+	value = strings.TrimSpace(value)
+	lineID = strings.TrimSpace(lineID)
+	query := `SELECT COUNT(1) FROM records
+		WHERE did = ? AND name = ?
+		AND (type = 'CNAME' OR ? = 'CNAME' OR (type = ? AND value = ? AND line_id = ?))`
+	args := []any{did, name, recordType, recordType, value, lineID}
 	if ignoreID > 0 {
 		query += ` AND id != ?`
 		args = append(args, ignoreID)
@@ -322,7 +329,7 @@ func (r *RecordRepository) SyncDomainRecords(ctx context.Context, domain models.
 	result := SyncRecordsResult{Total: len(records)}
 	err := withTx(ctx, r.DB, func(tx *sql.Tx) error {
 		for _, record := range records {
-			exists, err := syncedRecordExists(ctx, tx, domain.ID, record.RecordID, record.Name, record.Type)
+			exists, err := syncedRecordExists(ctx, tx, domain.ID, record.RecordID, record.Name, record.Type, record.Value, record.LineID)
 			if err != nil {
 				return err
 			}
@@ -352,12 +359,15 @@ func (r *RecordRepository) SyncDomainRecords(ctx context.Context, domain models.
 	return result, nil
 }
 
-func syncedRecordExists(ctx context.Context, tx *sql.Tx, did int64, recordID string, name string, recordType string) (bool, error) {
+func syncedRecordExists(ctx context.Context, tx *sql.Tx, did int64, recordID string, name string, recordType string, value string, lineID string) (bool, error) {
 	var count int
 	recordType = strings.ToUpper(strings.TrimSpace(recordType))
+	value = strings.TrimSpace(value)
+	lineID = strings.TrimSpace(lineID)
 	err := tx.QueryRowContext(ctx, `SELECT COUNT(1) FROM records
-		WHERE did = ? AND (record_id = ? OR (name = ? AND (type = ? OR type = 'CNAME' OR ? = 'CNAME')))`,
-		did, recordID, name, recordType, recordType).Scan(&count)
+		WHERE did = ? AND ((record_id = ? AND value = ? AND line_id = ?)
+			OR (name = ? AND (type = 'CNAME' OR ? = 'CNAME' OR (type = ? AND value = ? AND line_id = ?))))`,
+		did, recordID, value, lineID, name, recordType, recordType, value, lineID).Scan(&count)
 	if err != nil {
 		return false, err
 	}

@@ -139,3 +139,42 @@ func TestCloudflareProviderRequiresAuth(t *testing.T) {
 		t.Fatal("expected missing auth error")
 	}
 }
+
+func TestCloudflareProviderAddsDefaultMXPriority(t *testing.T) {
+	var methods []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["type"] != "MX" || payload["content"] != "mail.example.com" || payload["priority"] != float64(10) {
+			t.Fatalf("unexpected MX payload: %#v", payload)
+		}
+		methods = append(methods, r.Method)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"result": map[string]any{
+				"id": "mx-record", "name": "mail.example.com", "type": "MX",
+				"content": "mail.example.com", "priority": 10, "proxied": false,
+			},
+		})
+	}))
+	defer server.Close()
+
+	provider := &cloudflareProvider{client: server.Client()}
+	if err := provider.Configure(map[string]string{"ApiToken": "test-token", "BaseURL": server.URL}); err != nil {
+		t.Fatal(err)
+	}
+	zone := dns.Zone{ID: "zone1", Domain: "example.com"}
+	input := dns.RecordInput{Name: "mail", Type: "mx", Value: "mail.example.com", LineID: "0"}
+	if _, err := provider.CreateRecord(context.Background(), zone, input); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.UpdateRecord(context.Background(), zone, "mx-record", input); err != nil {
+		t.Fatal(err)
+	}
+	if len(methods) != 2 || methods[0] != http.MethodPost || methods[1] != http.MethodPatch {
+		t.Fatalf("unexpected request methods: %#v", methods)
+	}
+}

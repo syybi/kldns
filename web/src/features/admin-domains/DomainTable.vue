@@ -7,6 +7,9 @@
           <el-tag class="compact-tag" effect="plain">{{ providerLabel(row.provider_key) }}</el-tag>
         </template>
       </el-table-column>
+      <el-table-column label="平台配置" min-width="160" show-overflow-tooltip>
+        <template #default="{ row }">{{ row.provider_config_name || '-' }}</template>
+      </el-table-column>
       <el-table-column label="记录类型" min-width="220" show-overflow-tooltip>
         <template #default="{ row }">{{ row.record_types }}</template>
       </el-table-column>

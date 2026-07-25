@@ -66,20 +66,17 @@ func (p *dnsdunProvider) Label() string {
 }
 
 func (p *dnsdunProvider) ConfigFields() []dns.ConfigField {
-	return []dns.ConfigField{
-		{Name: "UID", Label: "UID", Required: true, Secret: true},
-		{Name: "API_KEY", Label: "API_KEY", Required: true, Secret: true},
-	}
+	return withProxyField(
+		dns.ConfigField{Name: "UID", Label: "UID", Required: true, Secret: true},
+		dns.ConfigField{Name: "API_KEY", Label: "API_KEY", Required: true, Secret: true},
+	)
 }
 
 func (p *dnsdunProvider) Configure(config map[string]string) error {
 	p.uid = strings.TrimSpace(config["UID"])
 	p.apiKey = strings.TrimSpace(config["API_KEY"])
 	p.baseURL = providerhttp.NormalizeBaseURL(config["BaseURL"], dnsdunDefaultBaseURL, true)
-	if p.client == nil {
-		p.client = providerhttp.NewClient()
-	}
-	return nil
+	return applyHTTPClient(&p.client, config)
 }
 
 func (p *dnsdunProvider) Check(ctx context.Context) error {
@@ -203,7 +200,7 @@ func (p *dnsdunProvider) doForm(ctx context.Context, action string, params map[s
 		return dnsdunResponse{}, &dns.ProviderError{Provider: p.Key(), Operation: operation, Message: "decode response failed"}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 || rawString(ret.Status.Code) != "1" {
-		return dnsdunResponse{}, &dns.ProviderError{Provider: p.Key(), Operation: operation, Message: dnsdunErrorMessage(resp.StatusCode, ret.Status.Message)}
+		return dnsdunResponse{}, &dns.ProviderError{Provider: p.Key(), Operation: operation, StatusCode: resp.StatusCode, Message: dnsdunErrorMessage(resp.StatusCode, ret.Status.Message)}
 	}
 	return ret, nil
 }

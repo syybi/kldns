@@ -87,12 +87,12 @@ func (p *huaweiProvider) Label() string {
 }
 
 func (p *huaweiProvider) ConfigFields() []dns.ConfigField {
-	return []dns.ConfigField{
-		{Name: "AccessKeyId", Label: "AccessKeyId", Required: true, Secret: true},
-		{Name: "SecretAccessKey", Label: "SecretAccessKey", Required: true, Secret: true},
-		{Name: "Region", Label: "Region", Description: "可选；留空自动尝试 cn-north-4 和 ap-southeast-3"},
-		{Name: "EnterpriseProjectId", Label: "EnterpriseProjectId", Description: "可选；默认企业项目填 0，非默认企业项目填企业项目 ID"},
-	}
+	return withProxyField(
+		dns.ConfigField{Name: "AccessKeyId", Label: "AccessKeyId", Required: true, Secret: true},
+		dns.ConfigField{Name: "SecretAccessKey", Label: "SecretAccessKey", Required: true, Secret: true},
+		dns.ConfigField{Name: "Region", Label: "Region", Description: "可选；留空自动尝试 cn-north-4 和 ap-southeast-3"},
+		dns.ConfigField{Name: "EnterpriseProjectId", Label: "EnterpriseProjectId", Description: "可选；默认企业项目填 0，非默认企业项目填企业项目 ID"},
+	)
 }
 
 func (p *huaweiProvider) Configure(config map[string]string) error {
@@ -111,8 +111,8 @@ func (p *huaweiProvider) Configure(config map[string]string) error {
 		p.customBaseURL = false
 		p.baseURL = huaweiBaseURL(p.region)
 	}
-	if p.client == nil {
-		p.client = providerhttp.NewClient()
+	if err := applyHTTPClient(&p.client, config); err != nil {
+		return err
 	}
 	if p.now == nil {
 		p.now = func() time.Time { return time.Now().UTC() }
@@ -192,6 +192,26 @@ func (p *huaweiProvider) ListRecordLines(context.Context, dns.Zone) ([]dns.Recor
 }
 
 func (p *huaweiProvider) CreateRecord(ctx context.Context, zone dns.Zone, input dns.RecordInput) (dns.Record, error) {
+	sets, err := p.listRecordSets(ctx, zone)
+	if err != nil {
+		return dns.Record{}, err
+	}
+	wantedName := huaweiRecordName(input.Name, zone.Domain)
+	wantedType := strings.ToUpper(strings.TrimSpace(input.Type))
+	for _, current := range sets {
+		if !strings.EqualFold(strings.TrimSpace(current.Name), strings.TrimSpace(wantedName)) || !strings.EqualFold(strings.TrimSpace(current.Type), wantedType) {
+			continue
+		}
+		value := huaweiFormatValue(input.Type, input.Value)
+		var added bool
+		current.Records, added = appendUniqueRecordValue(current.Records, value)
+		if added {
+			if err := p.putRecordSet(ctx, zone, current, "create_record"); err != nil {
+				return dns.Record{}, err
+			}
+		}
+		return huaweiInputToDomain(current, input, zone.Domain), nil
+	}
 	body := map[string]any{
 		"name":    huaweiRecordName(input.Name, zone.Domain),
 		"type":    strings.ToUpper(strings.TrimSpace(input.Type)),
@@ -206,6 +226,60 @@ func (p *huaweiProvider) CreateRecord(ctx context.Context, zone dns.Zone, input 
 		return dns.Record{}, &dns.ProviderError{Provider: p.Key(), Operation: "create_record", Message: "missing record id in response"}
 	}
 	return huaweiRecordToDomain(record, zone.Domain), nil
+}
+
+func (p *huaweiProvider) UpdateRecordValue(ctx context.Context, zone dns.Zone, remoteID string, oldInput dns.RecordInput, nextInput dns.RecordInput) (dns.Record, error) {
+	var current huaweiRecordSet
+	if err := p.doJSON(ctx, http.MethodGet, "/v2/zones/"+url.PathEscape(zone.ID)+"/recordsets/"+url.PathEscape(remoteID), nil, nil, &current, "get_record"); err != nil {
+		return dns.Record{}, err
+	}
+	nextName := huaweiRecordName(nextInput.Name, zone.Domain)
+	nextType := strings.ToUpper(strings.TrimSpace(nextInput.Type))
+	oldValue := huaweiFormatValue(oldInput.Type, oldInput.Value)
+	nextValue := huaweiFormatValue(nextInput.Type, nextInput.Value)
+	if strings.EqualFold(strings.TrimSpace(current.Name), strings.TrimSpace(nextName)) && strings.EqualFold(strings.TrimSpace(current.Type), nextType) {
+		values, ok := replaceRecordValue(current.Records, oldValue, nextValue)
+		if !ok {
+			return dns.Record{}, &dns.ProviderError{Provider: p.Key(), Operation: "update_record", Message: "record value not found or already exists"}
+		}
+		current.Records = values
+		if err := p.putRecordSet(ctx, zone, current, "update_record"); err != nil {
+			return dns.Record{}, err
+		}
+		return huaweiInputToDomain(current, nextInput, zone.Domain), nil
+	}
+
+	remaining, ok := removeRecordValue(current.Records, oldValue)
+	if !ok {
+		return dns.Record{}, &dns.ProviderError{Provider: p.Key(), Operation: "update_record", Message: "record value not found"}
+	}
+	if len(remaining) == 0 {
+		if err := p.DeleteRecord(ctx, zone, remoteID); err != nil {
+			return dns.Record{}, err
+		}
+	} else {
+		current.Records = remaining
+		if err := p.putRecordSet(ctx, zone, current, "update_record"); err != nil {
+			return dns.Record{}, err
+		}
+	}
+	return p.CreateRecord(ctx, zone, nextInput)
+}
+
+func (p *huaweiProvider) DeleteRecordValue(ctx context.Context, zone dns.Zone, remoteID string, input dns.RecordInput) error {
+	var current huaweiRecordSet
+	if err := p.doJSON(ctx, http.MethodGet, "/v2/zones/"+url.PathEscape(zone.ID)+"/recordsets/"+url.PathEscape(remoteID), nil, nil, &current, "get_record"); err != nil {
+		return err
+	}
+	remaining, ok := removeRecordValue(current.Records, huaweiFormatValue(input.Type, input.Value))
+	if !ok {
+		return &dns.ProviderError{Provider: p.Key(), Operation: "delete_record", Message: "record value not found", NotFound: true}
+	}
+	if len(remaining) == 0 {
+		return p.DeleteRecord(ctx, zone, remoteID)
+	}
+	current.Records = remaining
+	return p.putRecordSet(ctx, zone, current, "delete_record")
 }
 
 func (p *huaweiProvider) UpdateRecord(ctx context.Context, zone dns.Zone, remoteID string, input dns.RecordInput) (dns.Record, error) {
@@ -238,7 +312,23 @@ func (p *huaweiProvider) GetRecord(ctx context.Context, zone dns.Zone, remoteID 
 }
 
 func (p *huaweiProvider) ListRecords(ctx context.Context, zone dns.Zone) ([]dns.Record, error) {
+	sets, err := p.listRecordSets(ctx, zone)
+	if err != nil {
+		return nil, err
+	}
 	var records []dns.Record
+	for _, set := range sets {
+		for _, value := range set.Records {
+			item := set
+			item.Records = []string{value}
+			records = append(records, huaweiRecordToDomain(item, zone.Domain))
+		}
+	}
+	return records, nil
+}
+
+func (p *huaweiProvider) listRecordSets(ctx context.Context, zone dns.Zone) ([]huaweiRecordSet, error) {
+	var records []huaweiRecordSet
 	marker := ""
 	for {
 		query := map[string]string{"limit": "500"}
@@ -250,7 +340,7 @@ func (p *huaweiProvider) ListRecords(ctx context.Context, zone dns.Zone) ([]dns.
 			return nil, err
 		}
 		for _, record := range payload.RecordSets {
-			records = append(records, huaweiRecordToDomain(record, zone.Domain))
+			records = append(records, record)
 		}
 		marker = huaweiNextMarker(payload.Links.Next)
 		if marker == "" {
@@ -258,6 +348,17 @@ func (p *huaweiProvider) ListRecords(ctx context.Context, zone dns.Zone) ([]dns.
 		}
 	}
 	return records, nil
+}
+
+func (p *huaweiProvider) putRecordSet(ctx context.Context, zone dns.Zone, record huaweiRecordSet, operation string) error {
+	body := map[string]any{"name": record.Name, "type": strings.ToUpper(strings.TrimSpace(record.Type)), "ttl": record.TTL, "records": record.Records}
+	return p.doJSON(ctx, http.MethodPut, "/v2/zones/"+url.PathEscape(zone.ID)+"/recordsets/"+url.PathEscape(record.ID), nil, body, nil, operation)
+}
+
+func huaweiInputToDomain(record huaweiRecordSet, input dns.RecordInput, domain string) dns.Record {
+	result := huaweiRecordToDomain(record, domain)
+	result.Value = huaweiNormalizeValue(input.Type, huaweiFormatValue(input.Type, input.Value))
+	return result
 }
 
 func (p *huaweiProvider) doJSON(ctx context.Context, method string, path string, query map[string]string, body any, out any, operation string) error {
@@ -300,7 +401,7 @@ func (p *huaweiProvider) doJSON(ctx context.Context, method string, path string,
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		var errorBody huaweiErrorResponse
 		_ = json.Unmarshal(data, &errorBody)
-		return &dns.ProviderError{Provider: p.Key(), Operation: operation, Message: huaweiErrorMessage(resp.StatusCode, errorBody)}
+		return &dns.ProviderError{Provider: p.Key(), Operation: operation, StatusCode: resp.StatusCode, Message: huaweiErrorMessage(resp.StatusCode, errorBody)}
 	}
 	if out != nil && len(data) > 0 {
 		if err := json.Unmarshal(data, out); err != nil {

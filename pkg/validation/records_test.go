@@ -40,8 +40,51 @@ func TestValidateRecordPrefix(t *testing.T) {
 	if got, _, ok := ValidateRecordPrefix("@", nil); !ok || got != "@" {
 		t.Fatalf("root prefix should be accepted: got=%q ok=%v", got, ok)
 	}
+	if got, _, ok := ValidateRecordPrefix("*", nil); !ok || got != "*" {
+		t.Fatalf("wildcard prefix should be accepted: got=%q ok=%v", got, ok)
+	}
+	if got, _, ok := ValidateRecordPrefix("*.ACME", nil); !ok || got != "*.acme" {
+		t.Fatalf("nested wildcard prefix should be accepted: got=%q ok=%v", got, ok)
+	}
+	if got, _, ok := ValidateRecordPrefix("_acme-challenge.www", nil); !ok || got != "_acme-challenge.www" {
+		t.Fatalf("multi-label prefix should be accepted: got=%q ok=%v", got, ok)
+	}
+	if _, _, ok := ValidateRecordPrefix("acme.*", nil); ok {
+		t.Fatal("wildcard outside the leftmost label should be rejected")
+	}
+	if _, _, ok := ValidateRecordPrefix("*.*", nil); ok {
+		t.Fatal("multiple wildcards should be rejected")
+	}
 	if _, _, ok := ValidateRecordPrefix("@", []string{"@"}); ok {
 		t.Fatal("reserved root prefix should be rejected")
+	}
+}
+
+func TestValidateRelativeRecordName(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		want   string
+		wantOK bool
+	}{
+		{name: "root", input: "@", want: "@", wantOK: true},
+		{name: "wildcard", input: "*", want: "*", wantOK: true},
+		{name: "nested wildcard", input: "*.API", want: "*.api", wantOK: true},
+		{name: "middle wildcard", input: "api.*", wantOK: false},
+		{name: "multiple wildcards", input: "*.*", wantOK: false},
+		{name: "invalid label", input: "-api", wantOK: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, _, gotOK := ValidateRelativeRecordName(tt.input)
+			if gotOK != tt.wantOK {
+				t.Fatalf("ValidateRelativeRecordName() ok = %v, want %v", gotOK, tt.wantOK)
+			}
+			if gotOK && got != tt.want {
+				t.Fatalf("ValidateRelativeRecordName() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

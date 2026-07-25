@@ -18,17 +18,18 @@ func NewDomainsRepository(db *Database) *DomainsRepository {
 }
 
 type DomainAdminSummary struct {
-	ID                   int64  `json:"id"`
-	ProviderKey          string `json:"provider_key"`
-	ProviderConfigStored bool   `json:"provider_config_stored"`
-	RemoteZoneID         string `json:"remote_zone_id"`
-	Domain               string `json:"domain"`
-	GroupPolicy          string `json:"group_policy"`
-	RecordTypes          string `json:"record_types"`
-	Beian                int    `json:"beian"`
-	PointsCost           int64  `json:"points_cost"`
-	RequireReview        int    `json:"require_review"`
-	Description          string `json:"description"`
+	ID                 int64  `json:"id"`
+	ProviderKey        string `json:"provider_key"`
+	ProviderConfigID   int64  `json:"provider_config_id"`
+	ProviderConfigName string `json:"provider_config_name"`
+	RemoteZoneID       string `json:"remote_zone_id"`
+	Domain             string `json:"domain"`
+	GroupPolicy        string `json:"group_policy"`
+	RecordTypes        string `json:"record_types"`
+	Beian              int    `json:"beian"`
+	PointsCost         int64  `json:"points_cost"`
+	RequireReview      int    `json:"require_review"`
+	Description        string `json:"description"`
 }
 
 type DomainAdminFilter struct {
@@ -37,18 +38,17 @@ type DomainAdminFilter struct {
 }
 
 type DomainWrite struct {
-	ID                       int64             `json:"id"`
-	ProviderKey              string            `json:"provider_key"`
-	ProviderConfig           map[string]string `json:"provider_config"`
-	ProviderConfigCiphertext string            `json:"-"`
-	RemoteZoneID             string            `json:"remote_zone_id"`
-	Domain                   string            `json:"domain"`
-	GroupPolicy              string            `json:"group_policy"`
-	RecordTypes              []string          `json:"record_types"`
-	Beian                    int               `json:"beian"`
-	PointsCost               int64             `json:"points_cost"`
-	RequireReview            int               `json:"require_review"`
-	Description              string            `json:"description"`
+	ID               int64    `json:"id"`
+	ProviderKey      string   `json:"provider_key"`
+	ProviderConfigID int64    `json:"provider_config_id"`
+	RemoteZoneID     string   `json:"remote_zone_id"`
+	Domain           string   `json:"domain"`
+	GroupPolicy      string   `json:"group_policy"`
+	RecordTypes      []string `json:"record_types"`
+	Beian            int      `json:"beian"`
+	PointsCost       int64    `json:"points_cost"`
+	RequireReview    int      `json:"require_review"`
+	Description      string   `json:"description"`
 }
 
 type DomainConflict struct {
@@ -58,26 +58,22 @@ type DomainConflict struct {
 	Domain       string
 }
 
-type DomainProviderConfig struct {
-	ID                       int64
-	ProviderKey              string
-	ProviderConfigCiphertext string
-}
-
 func (r *DomainsRepository) ListDomains(ctx context.Context, filter DomainAdminFilter) ([]DomainAdminSummary, error) {
 	result, err := r.ListDomainsPage(ctx, filter, PageQuery{})
 	return result.Items, err
 }
 
 func (r *DomainsRepository) ListDomainsPage(ctx context.Context, filter DomainAdminFilter, page PageQuery) (PageResult[DomainAdminSummary], error) {
-	fromWhere := `FROM domains WHERE 1 = 1`
+	fromWhere := `FROM domains d
+		JOIN provider_configs pc ON pc.id = d.provider_config_id
+		WHERE 1 = 1`
 	args := []any{}
 	if filter.ProviderKey != "" {
-		fromWhere += ` AND provider_key = ?`
+		fromWhere += ` AND d.provider_key = ?`
 		args = append(args, filter.ProviderKey)
 	}
 	if term := likeTerm(filter.Keyword); term != "" {
-		fromWhere += ` AND lower(domain) LIKE ?`
+		fromWhere += ` AND lower(d.domain) LIKE ?`
 		args = append(args, term)
 	}
 	total := int64(0)
@@ -88,8 +84,8 @@ func (r *DomainsRepository) ListDomainsPage(ctx context.Context, filter DomainAd
 			return PageResult[DomainAdminSummary]{}, err
 		}
 	}
-	query := `SELECT id, provider_key, COALESCE(provider_config_ciphertext, '') != '', remote_zone_id, domain, group_policy, record_types, beian, points_cost, require_review, COALESCE(description, '') ` + fromWhere
-	query += ` ORDER BY id DESC`
+	query := `SELECT d.id, d.provider_key, d.provider_config_id, pc.name, d.remote_zone_id, d.domain, d.group_policy, d.record_types, d.beian, d.points_cost, d.require_review, COALESCE(d.description, '') ` + fromWhere
+	query += ` ORDER BY d.id DESC`
 	if page.Enabled() {
 		page = page.Normalize()
 		query, args = applyPage(query, args, page)
@@ -102,7 +98,7 @@ func (r *DomainsRepository) ListDomainsPage(ctx context.Context, filter DomainAd
 	items := []DomainAdminSummary{}
 	for rows.Next() {
 		var item DomainAdminSummary
-		if err := rows.Scan(&item.ID, &item.ProviderKey, &item.ProviderConfigStored, &item.RemoteZoneID, &item.Domain, &item.GroupPolicy, &item.RecordTypes, &item.Beian, &item.PointsCost, &item.RequireReview, &item.Description); err != nil {
+		if err := rows.Scan(&item.ID, &item.ProviderKey, &item.ProviderConfigID, &item.ProviderConfigName, &item.RemoteZoneID, &item.Domain, &item.GroupPolicy, &item.RecordTypes, &item.Beian, &item.PointsCost, &item.RequireReview, &item.Description); err != nil {
 			return PageResult[DomainAdminSummary]{}, err
 		}
 		items = append(items, item)
@@ -115,23 +111,6 @@ func (r *DomainsRepository) ListDomainsPage(ctx context.Context, filter DomainAd
 		page = PageQuery{Page: 1, PageSize: len(items)}
 	}
 	return PageResult[DomainAdminSummary]{Items: items, Total: total, Page: page.Page, PageSize: page.PageSize}, nil
-}
-
-func (r *DomainsRepository) StoredProviders(ctx context.Context) (map[string]bool, error) {
-	rows, err := r.DB.QueryContext(ctx, `SELECT provider_key FROM domains WHERE COALESCE(provider_config_ciphertext, '') != '' GROUP BY provider_key`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := map[string]bool{}
-	for rows.Next() {
-		var key string
-		if err := rows.Scan(&key); err != nil {
-			return nil, err
-		}
-		items[key] = true
-	}
-	return items, rows.Err()
 }
 
 func (r *DomainsRepository) FindDomainConflict(ctx context.Context, input DomainWrite) (DomainConflict, bool, error) {
@@ -167,18 +146,18 @@ func (r *DomainsRepository) UpsertDomain(ctx context.Context, input DomainWrite)
 	}
 	if input.ID > 0 {
 		_, err := tx.ExecContext(ctx, `UPDATE domains
-			SET provider_key = ?, provider_config_ciphertext = ?, remote_zone_id = ?, domain = ?, group_policy = ?, record_types = ?, beian = ?, points_cost = ?, require_review = ?, description = ?, updated_at = strftime('%s','now')
+			SET provider_key = ?, provider_config_id = ?, remote_zone_id = ?, domain = ?, group_policy = ?, record_types = ?, beian = ?, points_cost = ?, require_review = ?, description = ?, updated_at = strftime('%s','now')
 			WHERE id = ?`,
-			input.ProviderKey, input.ProviderConfigCiphertext, input.RemoteZoneID, input.Domain, input.GroupPolicy, recordTypes, boolInt(input.Beian), maxInt64(input.PointsCost, 0), boolInt(input.RequireReview), input.Description, input.ID)
+			input.ProviderKey, input.ProviderConfigID, input.RemoteZoneID, input.Domain, input.GroupPolicy, recordTypes, boolInt(input.Beian), maxInt64(input.PointsCost, 0), boolInt(input.RequireReview), input.Description, input.ID)
 		if err != nil {
 			_ = tx.Rollback()
 			return 0, err
 		}
 		return input.ID, tx.Commit()
 	}
-	res, err := tx.ExecContext(ctx, `INSERT INTO domains(provider_key, provider_config_ciphertext, remote_zone_id, domain, group_policy, record_types, beian, points_cost, require_review, description)
+	res, err := tx.ExecContext(ctx, `INSERT INTO domains(provider_key, provider_config_id, remote_zone_id, domain, group_policy, record_types, beian, points_cost, require_review, description)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		input.ProviderKey, input.ProviderConfigCiphertext, input.RemoteZoneID, input.Domain, input.GroupPolicy, recordTypes, boolInt(input.Beian), maxInt64(input.PointsCost, 0), boolInt(input.RequireReview), input.Description)
+		input.ProviderKey, input.ProviderConfigID, input.RemoteZoneID, input.Domain, input.GroupPolicy, recordTypes, boolInt(input.Beian), maxInt64(input.PointsCost, 0), boolInt(input.RequireReview), input.Description)
 	if err != nil {
 		_ = tx.Rollback()
 		return 0, err
@@ -189,13 +168,6 @@ func (r *DomainsRepository) UpsertDomain(ctx context.Context, input DomainWrite)
 		return 0, err
 	}
 	return id, tx.Commit()
-}
-
-func (r *DomainsRepository) DomainProviderConfig(ctx context.Context, id int64) (DomainProviderConfig, error) {
-	var item DomainProviderConfig
-	err := r.DB.QueryRowContext(ctx, `SELECT id, provider_key, COALESCE(provider_config_ciphertext, '') FROM domains WHERE id = ?`, id).
-		Scan(&item.ID, &item.ProviderKey, &item.ProviderConfigCiphertext)
-	return item, err
 }
 
 func (r *DomainsRepository) DeleteDomain(ctx context.Context, id int64) (bool, error) {

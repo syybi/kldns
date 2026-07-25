@@ -34,9 +34,10 @@ func (r *SubdomainsRepository) getSubdomainForUser(ctx context.Context, id int64
 	}
 	query := `SELECT
 			s.id, s.uid, s.did, s.name, s.full_domain, s.status, COALESCE(s.purpose, ''), COALESCE(s.reject_reason, ''), COALESCE(s.reviewed_by, 0), COALESCE(s.reviewed_at, 0), s.created_at, s.updated_at,
-			d.id, d.provider_key, COALESCE(d.provider_config_ciphertext, ''), d.remote_zone_id, d.domain, d.group_policy, d.record_types, d.beian, d.points_cost, d.require_review, COALESCE(d.description, '')
+			d.id, d.provider_key, d.provider_config_id, COALESCE(pc.config_ciphertext, ''), d.remote_zone_id, d.domain, d.group_policy, d.record_types, d.beian, d.points_cost, d.require_review, COALESCE(d.description, '')
 		FROM subdomains s
 		JOIN domains d ON d.id = s.did
+		JOIN provider_configs pc ON pc.id = d.provider_config_id
 		WHERE s.id = ? AND s.uid = ?`
 	args := []any{id, uid}
 	if activeOnly {
@@ -45,7 +46,7 @@ func (r *SubdomainsRepository) getSubdomainForUser(ctx context.Context, id int64
 	}
 	err := r.DB.QueryRowContext(ctx, query, args...).
 		Scan(&subdomain.ID, &subdomain.UID, &subdomain.DID, &subdomain.Name, &subdomain.FullDomain, &subdomain.Status, &subdomain.Purpose, &subdomain.RejectReason, &subdomain.ReviewedBy, &subdomain.ReviewedAt, &subdomain.CreatedAt, &subdomain.UpdatedAt,
-			&row.domain.ID, &row.domain.ProviderKey, &row.domain.ProviderConfigCiphertext, &row.domain.RemoteZoneID, &row.domain.Domain, &row.domain.GroupPolicy,
+			&row.domain.ID, &row.domain.ProviderKey, &row.domain.ProviderConfigID, &row.domain.ProviderConfigCiphertext, &row.domain.RemoteZoneID, &row.domain.Domain, &row.domain.GroupPolicy,
 			&row.recordTypes, &row.domain.Beian, &row.domain.PointsCost, &row.domain.RequireReview, &row.domain.Description)
 	if err != nil {
 		return models.Subdomain{}, models.Domain{}, err
@@ -62,12 +63,13 @@ func (r *SubdomainsRepository) GetSubdomain(ctx context.Context, id int64) (mode
 	}
 	err := r.DB.QueryRowContext(ctx, `SELECT
 			s.id, s.uid, s.did, s.name, s.full_domain, s.status, COALESCE(s.purpose, ''), COALESCE(s.reject_reason, ''), COALESCE(s.reviewed_by, 0), COALESCE(s.reviewed_at, 0), s.created_at, s.updated_at,
-			d.id, d.provider_key, COALESCE(d.provider_config_ciphertext, ''), d.remote_zone_id, d.domain, d.group_policy, d.record_types, d.beian, d.points_cost, d.require_review, COALESCE(d.description, '')
+			d.id, d.provider_key, d.provider_config_id, COALESCE(pc.config_ciphertext, ''), d.remote_zone_id, d.domain, d.group_policy, d.record_types, d.beian, d.points_cost, d.require_review, COALESCE(d.description, '')
 		FROM subdomains s
 		JOIN domains d ON d.id = s.did
+		JOIN provider_configs pc ON pc.id = d.provider_config_id
 		WHERE s.id = ?`, id).
 		Scan(&subdomain.ID, &subdomain.UID, &subdomain.DID, &subdomain.Name, &subdomain.FullDomain, &subdomain.Status, &subdomain.Purpose, &subdomain.RejectReason, &subdomain.ReviewedBy, &subdomain.ReviewedAt, &subdomain.CreatedAt, &subdomain.UpdatedAt,
-			&row.domain.ID, &row.domain.ProviderKey, &row.domain.ProviderConfigCiphertext, &row.domain.RemoteZoneID, &row.domain.Domain, &row.domain.GroupPolicy,
+			&row.domain.ID, &row.domain.ProviderKey, &row.domain.ProviderConfigID, &row.domain.ProviderConfigCiphertext, &row.domain.RemoteZoneID, &row.domain.Domain, &row.domain.GroupPolicy,
 			&row.recordTypes, &row.domain.Beian, &row.domain.PointsCost, &row.domain.RequireReview, &row.domain.Description)
 	if err != nil {
 		return models.Subdomain{}, models.Domain{}, err

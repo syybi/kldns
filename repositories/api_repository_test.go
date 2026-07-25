@@ -120,13 +120,11 @@ func TestAPIRepositoryListsOnlyAvailableDomains(t *testing.T) {
 	db := testMigratedDB(t)
 	defer db.Close()
 	seedAPIUser(t, db)
-	if _, err := db.Exec(`INSERT INTO dns_providers(key, config_ciphertext) VALUES ('fake', '{}')`); err != nil {
-		t.Fatal(err)
-	}
-	_, err := db.Exec(`INSERT INTO domains(provider_key, remote_zone_id, domain, group_policy, record_types) VALUES
-		('fake', 'z1', 'open.example', '0', 'A,CNAME'),
-		('fake', 'z2', 'group.example', '100', 'A'),
-		('fake', 'z3', 'closed.example', '101', 'A')`)
+	seedProviderConfig(t, db, 1, "fake", "fake-main")
+	_, err := db.Exec(`INSERT INTO domains(provider_key, provider_config_id, remote_zone_id, domain, group_policy, record_types) VALUES
+		('fake', 1, 'z1', 'open.example', '0', 'A,CNAME'),
+		('fake', 1, 'z2', 'group.example', '100', 'A'),
+		('fake', 1, 'z3', 'closed.example', '101', 'A')`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,14 +140,12 @@ func TestAPIRepositoryListsOnlyAvailableDomains(t *testing.T) {
 func TestAPIRepositoryListsPublicDomainsExcludingAdminOnly(t *testing.T) {
 	db := testMigratedDB(t)
 	defer db.Close()
-	if _, err := db.Exec(`INSERT INTO dns_providers(key, config_ciphertext) VALUES ('fake', '{}')`); err != nil {
-		t.Fatal(err)
-	}
-	_, err := db.Exec(`INSERT INTO domains(provider_key, remote_zone_id, domain, group_policy, record_types) VALUES
-		('fake', 'z1', 'open.example', '0', 'A,CNAME'),
-		('fake', 'z2', 'member.example', '100', 'A'),
-		('fake', 'z3', 'mixed.example', '99,100', 'A,TXT'),
-		('fake', 'z4', 'admin.example', '99', 'A')`)
+	seedProviderConfig(t, db, 1, "fake", "fake-main")
+	_, err := db.Exec(`INSERT INTO domains(provider_key, provider_config_id, remote_zone_id, domain, group_policy, record_types) VALUES
+		('fake', 1, 'z1', 'open.example', '0', 'A,CNAME'),
+		('fake', 1, 'z2', 'member.example', '100', 'A'),
+		('fake', 1, 'z3', 'mixed.example', '99,100', 'A,TXT'),
+		('fake', 1, 'z4', 'admin.example', '99', 'A')`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,11 +215,9 @@ func TestAPIRepositoryFiltersUserSubdomains(t *testing.T) {
 	db := testMigratedDB(t)
 	defer db.Close()
 	seedAPIUser(t, db)
-	if _, err := db.Exec(`INSERT INTO dns_providers(key, config_ciphertext) VALUES ('fake', '{}')`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`INSERT INTO domains(id, provider_key, remote_zone_id, domain, group_policy, record_types)
-		VALUES (1, 'fake', 'z1', 'example.com', '0', 'A,CNAME')`); err != nil {
+	seedProviderConfig(t, db, 1, "fake", "fake-main")
+	if _, err := db.Exec(`INSERT INTO domains(id, provider_key, provider_config_id, remote_zone_id, domain, group_policy, record_types)
+		VALUES (1, 'fake', 1, 'z1', 'example.com', '0', 'A,CNAME')`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO subdomains(uid, did, name, full_domain, status, purpose, reject_reason) VALUES
@@ -382,11 +376,10 @@ func TestPointsRepositoryRejectsOverdraft(t *testing.T) {
 func TestAdminRepositoryFindDomainConflict(t *testing.T) {
 	db := testMigratedDB(t)
 	defer db.Close()
-	if _, err := db.Exec(`INSERT INTO dns_providers(key, config_ciphertext) VALUES ('Cloudflare', '{}'), ('Aliyun', '{}')`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`INSERT INTO domains(id, provider_key, remote_zone_id, domain, group_policy, record_types)
-		VALUES (1, 'Cloudflare', 'zone-1', 'example.com', '0', 'A')`); err != nil {
+	seedProviderConfig(t, db, 1, "Cloudflare", "cf-main")
+	seedProviderConfig(t, db, 2, "Aliyun", "ali-main")
+	if _, err := db.Exec(`INSERT INTO domains(id, provider_key, provider_config_id, remote_zone_id, domain, group_policy, record_types)
+		VALUES (1, 'Cloudflare', 1, 'zone-1', 'example.com', '0', 'A')`); err != nil {
 		t.Fatal(err)
 	}
 	repo := NewAdminRepository(db)
@@ -476,21 +469,20 @@ func TestAdminRepositoryProtectsTurnstileSettings(t *testing.T) {
 func TestRecordRepositorySyncDomainRecordsUsesSystemUserAndSkipsExisting(t *testing.T) {
 	db := testMigratedDB(t)
 	defer db.Close()
-	if _, err := db.Exec(`INSERT INTO dns_providers(key, config_ciphertext) VALUES ('fake', '{}')`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`INSERT INTO domains(id, provider_key, remote_zone_id, domain, group_policy, record_types) VALUES (1, 'fake', 'z1', 'example.com', '0', 'A,CNAME')`); err != nil {
+	seedProviderConfig(t, db, 1, "fake", "fake-main")
+	if _, err := db.Exec(`INSERT INTO domains(id, provider_key, provider_config_id, remote_zone_id, domain, group_policy, record_types) VALUES (1, 'fake', 1, 'z1', 'example.com', '0', 'A,CNAME')`); err != nil {
 		t.Fatal(err)
 	}
 	repo := NewRecordRepository(db)
 	result, err := repo.SyncDomainRecords(context.Background(), models.Domain{ID: 1, Domain: "example.com", ProviderKey: "fake"}, []SyncedRecordInput{
 		{RecordID: "remote-1", Name: "www", Type: "A", Value: "1.1.1.1", LineID: "0", Line: "默认"},
 		{RecordID: "remote-1", Name: "www", Type: "A", Value: "1.1.1.1", LineID: "0", Line: "默认"},
+		{RecordID: "remote-1", Name: "www", Type: "A", Value: "2.2.2.2", LineID: "0", Line: "默认"},
 	}, models.OperationLog{Source: "admin", Action: "domain.sync_records", Message: "sync"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Total != 2 || result.Created != 1 || result.Skipped != 1 {
+	if result.Total != 3 || result.Created != 2 || result.Skipped != 1 {
 		t.Fatalf("sync result = %#v", result)
 	}
 	var uid int64
@@ -503,6 +495,13 @@ func TestRecordRepositorySyncDomainRecordsUsesSystemUserAndSkipsExisting(t *test
 	}
 	if subdomainID == 0 {
 		t.Fatal("synced record should be attached to a system subdomain")
+	}
+	var recordCount int
+	if err := db.QueryRow(`SELECT COUNT(1) FROM records WHERE did = 1 AND name = 'www' AND type = 'A'`).Scan(&recordCount); err != nil {
+		t.Fatal(err)
+	}
+	if recordCount != 2 {
+		t.Fatalf("synced RRset values = %d, want 2", recordCount)
 	}
 }
 
@@ -523,6 +522,18 @@ func seedAPIUser(t *testing.T, db *Database) {
 	_, err := db.Exec(`INSERT INTO users(id, group_id, status, username, password_hash, sid, email, points)
 		VALUES (1, 100, 2, 'alice', 'hash', 'sid', 'alice@example.com', 100)`)
 	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func seedProviderConfig(t *testing.T, db *Database, id int64, providerKey string, name string) {
+	t.Helper()
+	if _, err := db.Exec(`INSERT INTO dns_providers(key, config_ciphertext) VALUES (?, '')
+		ON CONFLICT(key) DO NOTHING`, providerKey); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO provider_configs(id, provider_key, name, config_ciphertext)
+		VALUES (?, ?, ?, 'cipher')`, id, providerKey, name); err != nil {
 		t.Fatal(err)
 	}
 }

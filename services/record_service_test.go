@@ -53,6 +53,27 @@ func TestRecordServiceCreatesNestedRecordDirectly(t *testing.T) {
 	}
 }
 
+func TestRecordServiceCreatesWildcardRecordDirectly(t *testing.T) {
+	repo := &fakeRecordRepo{
+		user:      models.User{ID: 1, GroupID: 100, Status: 2, Points: 10},
+		domain:    models.Domain{ID: 1, ProviderKey: "fake", RemoteZoneID: "z1", Domain: "example.com", RecordTypes: []string{"A"}},
+		subdomain: models.Subdomain{ID: 9, UID: 1, DID: 1, Name: "dd", FullDomain: "dd.example.com", Status: 1},
+	}
+	provider := &fakeProvider{}
+	service := RecordService{Repo: repo, Resolver: fakeResolver{provider: provider}}
+
+	result, appErr := service.Submit(context.Background(), SubmitRecordInput{UserID: 1, SubdomainID: 9, Name: "*", Type: "A", Value: "1.1.1.1"})
+	if appErr != nil {
+		t.Fatal(appErr)
+	}
+	if result.Mode != "direct" || !provider.created || !repo.applied {
+		t.Fatalf("result=%#v created=%v applied=%v", result, provider.created, repo.applied)
+	}
+	if repo.record.Name != "*.dd" || provider.lastInput.Name != "*.dd" {
+		t.Fatalf("record=%#v providerInput=%#v, want wildcard under subdomain", repo.record, provider.lastInput)
+	}
+}
+
 func TestRecordServiceCreatesSubdomainApexRecordDirectly(t *testing.T) {
 	repo := &fakeRecordRepo{
 		user:      models.User{ID: 1, GroupID: 100, Status: 2, Points: 10},
@@ -117,6 +138,63 @@ func TestRecordServiceCompensatesRemoteCreateWhenLocalApplyFails(t *testing.T) {
 	}
 	if repo.jobCreated {
 		t.Fatal("compensation job should only be written when remote delete fails")
+	}
+}
+
+func TestRecordServiceDeletesLocalWhenRemoteRecordAlreadyGone(t *testing.T) {
+	repo := &fakeRecordRepo{
+		user:      models.User{ID: 1, GroupID: 100, Status: 2, Points: 10},
+		domain:    models.Domain{ID: 1, ProviderKey: "fake", RemoteZoneID: "z1", Domain: "example.com", RecordTypes: []string{"A"}},
+		subdomain: models.Subdomain{ID: 9, UID: 1, DID: 1, Name: "dd", FullDomain: "dd.example.com", Status: 1},
+		record:    models.Record{ID: 11, UID: 1, DID: 1, SubdomainID: 9, RecordID: "remote-11", Name: "dd", Type: "A", Value: "1.1.1.1"},
+	}
+	provider := &fakeProvider{deleteErr: &dns.ProviderError{Provider: "fake", Operation: "delete_record", Message: "record not found", NotFound: true}}
+	service := RecordService{Repo: repo, Resolver: fakeResolver{provider: provider}}
+
+	result, appErr := service.Delete(context.Background(), 1, 11, "web")
+	if appErr != nil {
+		t.Fatal(appErr)
+	}
+	if result.Mode != "direct" || !provider.deleted || !repo.deleted {
+		t.Fatalf("result=%#v deletedRemote=%v deletedLocal=%v", result, provider.deleted, repo.deleted)
+	}
+}
+
+func TestRecordServiceDeleteStillFailsOnOtherRemoteErrors(t *testing.T) {
+	repo := &fakeRecordRepo{
+		user:      models.User{ID: 1, GroupID: 100, Status: 2, Points: 10},
+		domain:    models.Domain{ID: 1, ProviderKey: "fake", RemoteZoneID: "z1", Domain: "example.com", RecordTypes: []string{"A"}},
+		subdomain: models.Subdomain{ID: 9, UID: 1, DID: 1, Name: "dd", FullDomain: "dd.example.com", Status: 1},
+		record:    models.Record{ID: 11, UID: 1, DID: 1, SubdomainID: 9, RecordID: "remote-11", Name: "dd", Type: "A", Value: "1.1.1.1"},
+	}
+	provider := &fakeProvider{deleteErr: errors.New("remote timeout")}
+	service := RecordService{Repo: repo, Resolver: fakeResolver{provider: provider}}
+
+	_, appErr := service.Delete(context.Background(), 1, 11, "web")
+	if appErr == nil || appErr.Code != apperrors.CodeDNSProviderFailed {
+		t.Fatalf("error = %#v, want dns provider failed", appErr)
+	}
+	if repo.deleted {
+		t.Fatal("local record should not be deleted when remote delete fails for other reasons")
+	}
+}
+
+func TestRecordServiceDeletesLocalWhenRemoteIDMissing(t *testing.T) {
+	repo := &fakeRecordRepo{
+		user:      models.User{ID: 1, GroupID: 100, Status: 2, Points: 10},
+		domain:    models.Domain{ID: 1, ProviderKey: "fake", RemoteZoneID: "z1", Domain: "example.com", RecordTypes: []string{"A"}},
+		subdomain: models.Subdomain{ID: 9, UID: 1, DID: 1, Name: "dd", FullDomain: "dd.example.com", Status: 1},
+		record:    models.Record{ID: 11, UID: 1, DID: 1, SubdomainID: 9, RecordID: "", Name: "dd", Type: "A", Value: "1.1.1.1"},
+	}
+	provider := &fakeProvider{deleteErr: errors.New("should not be called")}
+	service := RecordService{Repo: repo, Resolver: fakeResolver{provider: provider}}
+
+	result, appErr := service.Delete(context.Background(), 1, 11, "web")
+	if appErr != nil {
+		t.Fatal(appErr)
+	}
+	if result.Mode != "direct" || provider.deleted || !repo.deleted {
+		t.Fatalf("result=%#v remoteDeleted=%v localDeleted=%v", result, provider.deleted, repo.deleted)
 	}
 }
 
@@ -271,6 +349,86 @@ func TestAdminRecordServiceCreatesDirectRecord(t *testing.T) {
 	}
 }
 
+func TestAdminRecordServiceCreatesWildcardRecord(t *testing.T) {
+	repo := &fakeRecordRepo{
+		user:   models.User{ID: 1, GroupID: 100, Status: 2, Points: 10},
+		domain: models.Domain{ID: 1, ProviderKey: "fake", RemoteZoneID: "z1", Domain: "example.com", RecordTypes: []string{"A"}},
+	}
+	provider := &fakeProvider{}
+	service := AdminRecordService{Repo: repo, Resolver: fakeResolver{provider: provider}}
+
+	result, appErr := service.Create(context.Background(), AdminRecordInput{AdminID: 99, UID: 1, DID: 1, Name: "*", Type: "A", Value: "1.1.1.1"})
+	if appErr != nil {
+		t.Fatal(appErr)
+	}
+	if result.Mode != "direct" || !provider.created || !repo.adminCreated {
+		t.Fatalf("result=%#v created=%v adminCreated=%v", result, provider.created, repo.adminCreated)
+	}
+	if repo.adminRecord.Name != "*" || provider.lastInput.Name != "*" {
+		t.Fatalf("adminRecord=%#v providerInput=%#v, want wildcard prefix", repo.adminRecord, provider.lastInput)
+	}
+}
+
+func TestAdminRecordServiceCreatesNestedWildcardRecord(t *testing.T) {
+	repo := &fakeRecordRepo{
+		user:   models.User{ID: 1, GroupID: 100, Status: 2, Points: 10},
+		domain: models.Domain{ID: 1, ProviderKey: "fake", RemoteZoneID: "z1", Domain: "example.com", RecordTypes: []string{"A"}},
+	}
+	provider := &fakeProvider{}
+	service := AdminRecordService{Repo: repo, Resolver: fakeResolver{provider: provider}}
+
+	result, appErr := service.Create(context.Background(), AdminRecordInput{AdminID: 99, UID: 1, DID: 1, Name: "*.acme", Type: "A", Value: "1.1.1.1"})
+	if appErr != nil {
+		t.Fatal(appErr)
+	}
+	if result.Mode != "direct" || !provider.created || !repo.adminCreated {
+		t.Fatalf("result=%#v created=%v adminCreated=%v", result, provider.created, repo.adminCreated)
+	}
+	if repo.adminRecord.Name != "*.acme" || provider.lastInput.Name != "*.acme" {
+		t.Fatalf("adminRecord=%#v providerInput=%#v, want nested wildcard prefix", repo.adminRecord, provider.lastInput)
+	}
+}
+
+func TestAdminRecordServiceSkipsRemoteUpdateWhenRecordUnchanged(t *testing.T) {
+	repo := &fakeRecordRepo{
+		record: models.Record{ID: 11, UID: 1, DID: 1, RecordID: "remote-11", Name: "*.acme", Type: "A", Value: "1.1.1.1", LineID: "0", Line: "默认"},
+		domain: models.Domain{ID: 1, ProviderKey: "fake", RemoteZoneID: "z1", Domain: "example.com", RecordTypes: []string{"A"}},
+	}
+	provider := &fakeProvider{updateErr: errors.New("remote update should not be called")}
+	service := AdminRecordService{Repo: repo, Resolver: fakeResolver{provider: provider}}
+
+	result, appErr := service.Update(context.Background(), AdminRecordInput{AdminID: 99, ID: 11, Name: "*.acme", Type: "A", Value: "1.1.1.1", LineID: "default"})
+	if appErr != nil {
+		t.Fatal(appErr)
+	}
+	if result.Mode != "direct" || provider.updated || !repo.adminUpdated {
+		t.Fatalf("result=%#v updated=%v adminUpdated=%v", result, provider.updated, repo.adminUpdated)
+	}
+}
+
+func TestAdminRecordServiceTreatsAlreadyAppliedRemoteUpdateAsSuccess(t *testing.T) {
+	repo := &fakeRecordRepo{
+		record: models.Record{ID: 11, UID: 1, DID: 1, RecordID: "remote-11", Name: "*.acme", Type: "A", Value: "1.1.1.1", LineID: "0", Line: "默认"},
+		domain: models.Domain{ID: 1, ProviderKey: "fake", RemoteZoneID: "z1", Domain: "example.com", RecordTypes: []string{"A"}},
+	}
+	provider := &fakeProvider{
+		updateErr: errors.New("Aliyun update_record: The DNS record already exists."),
+		getRecord: dns.Record{RemoteID: "remote-11", Name: "*.acme", Type: "A", Value: "2.2.2.2", LineID: "default", Line: "默认"},
+	}
+	service := AdminRecordService{Repo: repo, Resolver: fakeResolver{provider: provider}}
+
+	result, appErr := service.Update(context.Background(), AdminRecordInput{AdminID: 99, ID: 11, Name: "*.acme", Type: "A", Value: "2.2.2.2", LineID: "default"})
+	if appErr != nil {
+		t.Fatal(appErr)
+	}
+	if result.Mode != "direct" || !provider.updated || !repo.adminUpdated {
+		t.Fatalf("result=%#v updated=%v adminUpdated=%v", result, provider.updated, repo.adminUpdated)
+	}
+	if repo.adminRecord.Value != "2.2.2.2" || repo.adminRecord.Line != "默认" {
+		t.Fatalf("adminRecord=%#v, want updated local record", repo.adminRecord)
+	}
+}
+
 func TestAdminSubdomainReviewServiceApprovesPendingSubdomain(t *testing.T) {
 	repo := &fakeRecordRepo{
 		subdomain: models.Subdomain{ID: 9, UID: 1, DID: 1, Name: "dd", FullDomain: "dd.example.com", Status: models.SubdomainStatusPending, Purpose: "个人博客"},
@@ -360,6 +518,27 @@ func TestAdminDeletionServiceStopsWhenRemoteDeleteFails(t *testing.T) {
 	}
 	if repo.deleted || repo.adminSubdomainDeleted {
 		t.Fatalf("deleted=%v subdomainDeleted=%v, want no local delete", repo.deleted, repo.adminSubdomainDeleted)
+	}
+}
+
+func TestAdminDeletionServiceContinuesWhenRemoteRecordAlreadyGone(t *testing.T) {
+	repo := &fakeRecordRepo{
+		domain:    models.Domain{ID: 1, ProviderKey: "fake", RemoteZoneID: "z1", Domain: "example.com"},
+		subdomain: models.Subdomain{ID: 9, UID: 1, DID: 1, Name: "dd", FullDomain: "dd.example.com", Status: 1},
+		records:   []models.Record{{ID: 11, UID: 1, DID: 1, SubdomainID: 9, RecordID: "remote-11", Name: "dd", Type: "A", Value: "1.1.1.1"}},
+	}
+	provider := &fakeProvider{deleteErr: &dns.ProviderError{Provider: "fake", Operation: "delete_record", Message: "记录不存在"}}
+	service := AdminDeletionService{Repo: repo, Resolver: fakeResolver{provider: provider}}
+
+	result, appErr := service.DeleteSubdomain(context.Background(), 99, 9, "admin")
+	if appErr != nil {
+		t.Fatal(appErr)
+	}
+	if !result.Deleted || result.RecordsDeleted != 1 || result.SubdomainsDeleted != 1 {
+		t.Fatalf("result=%#v", result)
+	}
+	if !repo.deleted || !repo.adminSubdomainDeleted {
+		t.Fatalf("deleted=%v subdomainDeleted=%v, want local cleanup after remote not found", repo.deleted, repo.adminSubdomainDeleted)
 	}
 }
 
@@ -547,7 +726,7 @@ func (r *fakeRecordRepo) GetRecord(context.Context, int64) (models.Record, error
 	return r.record, nil
 }
 
-func (r *fakeRecordRepo) RecordNameExists(context.Context, int64, string, string, int64) (bool, error) {
+func (r *fakeRecordRepo) RecordConflictExists(context.Context, int64, string, string, string, string, int64) (bool, error) {
 	return r.nameConflict, nil
 }
 
@@ -615,7 +794,9 @@ type fakeProvider struct {
 	deleted     bool
 	deleteCount int
 	deleteErr   error
+	updateErr   error
 	records     []dns.Record
+	getRecord   dns.Record
 	lastInput   dns.RecordInput
 }
 
@@ -636,6 +817,9 @@ func (p *fakeProvider) CreateRecord(_ context.Context, _ dns.Zone, input dns.Rec
 func (p *fakeProvider) UpdateRecord(_ context.Context, _ dns.Zone, _ string, input dns.RecordInput) (dns.Record, error) {
 	p.updated = true
 	p.lastInput = input
+	if p.updateErr != nil {
+		return dns.Record{}, p.updateErr
+	}
 	return dns.Record{RemoteID: "remote-1", LineID: "0", Line: "默认"}, nil
 }
 func (p *fakeProvider) DeleteRecord(context.Context, dns.Zone, string) error {
@@ -647,6 +831,9 @@ func (p *fakeProvider) DeleteRecord(context.Context, dns.Zone, string) error {
 	return nil
 }
 func (p *fakeProvider) GetRecord(context.Context, dns.Zone, string) (dns.Record, error) {
+	if p.getRecord.RemoteID != "" {
+		return p.getRecord, nil
+	}
 	return dns.Record{}, nil
 }
 func (p *fakeProvider) ListRecords(context.Context, dns.Zone) ([]dns.Record, error) {

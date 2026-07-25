@@ -73,9 +73,9 @@ func (p *cloudflareProvider) Label() string {
 }
 
 func (p *cloudflareProvider) ConfigFields() []dns.ConfigField {
-	return []dns.ConfigField{
-		{Name: "ApiToken", Label: "ApiToken", Required: true, Secret: true, Description: "Cloudflare API Token"},
-	}
+	return withProxyField(
+		dns.ConfigField{Name: "ApiToken", Label: "ApiToken", Required: true, Secret: true, Description: "Cloudflare API Token"},
+	)
 }
 
 func (p *cloudflareProvider) Configure(config map[string]string) error {
@@ -83,10 +83,7 @@ func (p *cloudflareProvider) Configure(config map[string]string) error {
 	p.email = strings.TrimSpace(config["Email"])
 	p.apiKey = strings.TrimSpace(config["ApiKey"])
 	p.baseURL = providerhttp.NormalizeBaseURL(config["BaseURL"], cloudflareDefaultBaseURL, true)
-	if p.client == nil {
-		p.client = providerhttp.NewClient()
-	}
-	return nil
+	return applyHTTPClient(&p.client, config)
 }
 
 func (p *cloudflareProvider) Check(ctx context.Context) error {
@@ -122,12 +119,7 @@ func (p *cloudflareProvider) ListRecordLines(context.Context, dns.Zone) ([]dns.R
 }
 
 func (p *cloudflareProvider) CreateRecord(ctx context.Context, zone dns.Zone, input dns.RecordInput) (dns.Record, error) {
-	payload := map[string]any{
-		"name":    buildCloudflareRecordName(input.Name, zone.Domain),
-		"type":    strings.ToUpper(strings.TrimSpace(input.Type)),
-		"content": strings.TrimSpace(input.Value),
-		"proxied": cloudflareProxied(input.LineID),
-	}
+	payload := cloudflareRecordPayload(zone, input)
 	var record cloudflareRecord
 	_, err := p.doJSON(ctx, http.MethodPost, "zones/"+url.PathEscape(zone.ID)+"/dns_records", payload, &record, "create_record")
 	if err != nil {
@@ -137,12 +129,7 @@ func (p *cloudflareProvider) CreateRecord(ctx context.Context, zone dns.Zone, in
 }
 
 func (p *cloudflareProvider) UpdateRecord(ctx context.Context, zone dns.Zone, remoteID string, input dns.RecordInput) (dns.Record, error) {
-	payload := map[string]any{
-		"name":    buildCloudflareRecordName(input.Name, zone.Domain),
-		"type":    strings.ToUpper(strings.TrimSpace(input.Type)),
-		"content": strings.TrimSpace(input.Value),
-		"proxied": cloudflareProxied(input.LineID),
-	}
+	payload := cloudflareRecordPayload(zone, input)
 	var record cloudflareRecord
 	_, err := p.doJSON(ctx, http.MethodPatch, "zones/"+url.PathEscape(zone.ID)+"/dns_records/"+url.PathEscape(remoteID), payload, &record, "update_record")
 	if err != nil {
@@ -222,7 +209,7 @@ func (p *cloudflareProvider) doJSON(ctx context.Context, method string, path str
 		return cloudflareResultInfo{}, &dns.ProviderError{Provider: p.Key(), Operation: operation, Message: "decode response failed"}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 || !wrapper.Success {
-		return cloudflareResultInfo{}, &dns.ProviderError{Provider: p.Key(), Operation: operation, Message: cloudflareErrorMessage(resp.StatusCode, wrapper.Errors)}
+		return cloudflareResultInfo{}, &dns.ProviderError{Provider: p.Key(), Operation: operation, StatusCode: resp.StatusCode, Message: cloudflareErrorMessage(resp.StatusCode, wrapper.Errors)}
 	}
 	if out != nil && wrapper.Result != nil {
 		if err := json.Unmarshal(wrapper.Result, out); err != nil {
@@ -309,4 +296,18 @@ func cloudflareRecordToDomain(record cloudflareRecord, domain string) dns.Record
 		LineID:   cloudflareLineID(record.Proxied),
 		Line:     cloudflareLine(record.Proxied),
 	}
+}
+
+func cloudflareRecordPayload(zone dns.Zone, input dns.RecordInput) map[string]any {
+	recordType := strings.ToUpper(strings.TrimSpace(input.Type))
+	payload := map[string]any{
+		"name":    buildCloudflareRecordName(input.Name, zone.Domain),
+		"type":    recordType,
+		"content": strings.TrimSpace(input.Value),
+		"proxied": cloudflareProxied(input.LineID),
+	}
+	if recordType == "MX" {
+		payload["priority"] = 10
+	}
+	return payload
 }

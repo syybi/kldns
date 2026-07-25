@@ -1,13 +1,43 @@
+# Runtime data & SQLite
 data/
-.idea/
 *.db
 *.db-shm
 *.db-wal
-kldns
-kldns.exe
+
+# Build binaries & release packages
+/kldns
+/kldns.exe
+outputs/
+
+# Frontend
 web/node_modules/
 web/dist/
 web/tsconfig.tsbuildinfo
+
+# Go test / coverage
+*.test
+coverage.out
+*.coverprofile
+*.prof
+
+# IDE & editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS junk
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Local tooling & agent notes
 .playwright-mcp/
-outputs/
+.agents/
 AGENTS.md
+
+# Secrets / local env overrides
+.env
+.env.*
+!.env.example

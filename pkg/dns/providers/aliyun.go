@@ -86,18 +86,18 @@ func (p *aliyunProvider) Label() string {
 }
 
 func (p *aliyunProvider) ConfigFields() []dns.ConfigField {
-	return []dns.ConfigField{
-		{Name: "AccessKeyId", Label: "AccessKeyId", Required: true, Secret: true},
-		{Name: "AccessKeySecret", Label: "AccessKeySecret", Required: true, Secret: true},
-	}
+	return withProxyField(
+		dns.ConfigField{Name: "AccessKeyId", Label: "AccessKeyId", Required: true, Secret: true},
+		dns.ConfigField{Name: "AccessKeySecret", Label: "AccessKeySecret", Required: true, Secret: true},
+	)
 }
 
 func (p *aliyunProvider) Configure(config map[string]string) error {
 	p.accessKeyID = strings.TrimSpace(config["AccessKeyId"])
 	p.accessKeySecret = strings.TrimSpace(config["AccessKeySecret"])
 	p.baseURL = providerhttp.NormalizeBaseURL(config["BaseURL"], aliyunDefaultBaseURL, true)
-	if p.client == nil {
-		p.client = providerhttp.NewClient()
+	if err := applyHTTPClient(&p.client, config); err != nil {
+		return err
 	}
 	if p.now == nil {
 		p.now = func() time.Time { return time.Now().UTC() }
@@ -250,7 +250,7 @@ func (p *aliyunProvider) doRPC(ctx context.Context, action string, actionParams 
 		return aliyunResponse{}, &dns.ProviderError{Provider: p.Key(), Operation: operation, Message: "decode response failed"}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 || ret.Code != "" {
-		return aliyunResponse{}, &dns.ProviderError{Provider: p.Key(), Operation: operation, Message: aliyunErrorMessage(resp.StatusCode, ret.Message)}
+		return aliyunResponse{}, &dns.ProviderError{Provider: p.Key(), Operation: operation, StatusCode: resp.StatusCode, Message: aliyunErrorMessage(resp.StatusCode, ret.Message)}
 	}
 	return ret, nil
 }

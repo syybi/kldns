@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestRecordRepositoryConflictAllowsDifferentTypesAndProtectsCNAME(t *testing.T) {
+func TestRecordRepositoryConflictAllowsDNSRecordSetsAndProtectsCNAME(t *testing.T) {
 	db := testMigratedDB(t)
 	defer db.Close()
 	seedAPIUser(t, db)
@@ -16,21 +16,35 @@ func TestRecordRepositoryConflictAllowsDifferentTypesAndProtectsCNAME(t *testing
 	}
 
 	repo := NewRecordRepository(db)
-	conflict, err := repo.RecordNameExists(context.Background(), 1, "test", "AAAA", 0)
+	conflict, err := repo.RecordConflictExists(context.Background(), 1, "test", "AAAA", "2001:db8::1", "0", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if conflict {
 		t.Fatal("AAAA should not conflict with existing A record")
 	}
-	conflict, err = repo.RecordNameExists(context.Background(), 1, "test", "A", 0)
+	conflict, err = repo.RecordConflictExists(context.Background(), 1, "test", "A", "2.2.2.2", "0", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conflict {
+		t.Fatal("same record type with a different value should be allowed")
+	}
+	conflict, err = repo.RecordConflictExists(context.Background(), 1, "test", "A", "1.1.1.1", "0", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !conflict {
-		t.Fatal("same record type should conflict")
+		t.Fatal("an exact duplicate should conflict")
 	}
-	conflict, err = repo.RecordNameExists(context.Background(), 1, "test", "CNAME", 0)
+	conflict, err = repo.RecordConflictExists(context.Background(), 1, "test", "A", "1.1.1.1", "unicom", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conflict {
+		t.Fatal("the same value on a different provider line should be allowed")
+	}
+	conflict, err = repo.RecordConflictExists(context.Background(), 1, "test", "CNAME", "target.example.com", "0", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,8 +83,11 @@ func seedRecordDomain(t *testing.T, db *Database) {
 	if _, err := db.Exec(`INSERT INTO dns_providers(key, config_ciphertext) VALUES ('fake', '')`); err != nil {
 		t.Fatal(err)
 	}
-	_, err := db.Exec(`INSERT INTO domains(id, provider_key, remote_zone_id, domain, group_policy, record_types, points_cost)
-		VALUES (1, 'fake', 'zone-1', 'example.com', '0', 'A,AAAA,CNAME,MX,TXT', 0)`)
+	if _, err := db.Exec(`INSERT INTO provider_configs(id, provider_key, name, config_ciphertext) VALUES (1, 'fake', 'fake-main', 'cipher')`); err != nil {
+		t.Fatal(err)
+	}
+	_, err := db.Exec(`INSERT INTO domains(id, provider_key, provider_config_id, remote_zone_id, domain, group_policy, record_types, points_cost)
+		VALUES (1, 'fake', 1, 'zone-1', 'example.com', '0', 'A,AAAA,CNAME,MX,TXT', 0)`)
 	if err != nil {
 		t.Fatal(err)
 	}

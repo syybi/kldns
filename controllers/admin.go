@@ -175,24 +175,30 @@ func (c *AdminListController) SaveDomain() {
 	if id := c.PathInt64(":id"); id > 0 {
 		input.ID = id
 	}
-	input.ProviderKey = strings.TrimSpace(input.ProviderKey)
 	input.RemoteZoneID = strings.TrimSpace(input.RemoteZoneID)
 	input.Domain = strings.ToLower(strings.TrimSpace(input.Domain))
-	if input.ProviderKey == "" || input.RemoteZoneID == "" || input.Domain == "" {
+	if input.ProviderConfigID <= 0 || input.RemoteZoneID == "" || input.Domain == "" {
 		c.Fail(http.StatusBadRequest, apperrors.CodeInvalidArgument, "请完整填写主域信息")
 		return
 	}
-	provider, ok := dns.New(input.ProviderKey)
-	if !ok {
+	repo := repositories.NewAdminRepository(app.DB())
+	configRepo := repo.ProviderConfigs()
+	config, err := configRepo.Get(c.Ctx.Request.Context(), input.ProviderConfigID)
+	if err != nil {
+		c.Fail(http.StatusBadRequest, apperrors.CodeInvalidArgument, "请选择有效的平台配置")
+		return
+	}
+	if strings.TrimSpace(config.ConfigCiphertext) == "" {
+		c.Fail(http.StatusBadRequest, apperrors.CodeInvalidArgument, "所选平台配置尚未填写密钥，请先完善配置")
+		return
+	}
+	input.ProviderKey = config.ProviderKey
+	if _, ok := dns.New(input.ProviderKey); !ok {
 		c.Fail(http.StatusBadRequest, apperrors.CodeInvalidArgument, "暂不支持此 DNS 平台")
 		return
 	}
-	repo := repositories.NewAdminRepository(app.DB())
-	var existing repositories.DomainProviderConfig
 	if input.ID > 0 {
-		var err error
-		existing, err = repo.DomainProviderConfig(c.Ctx.Request.Context(), input.ID)
-		if err != nil {
+		if _, err := repositories.NewRecordRepository(app.DB()).GetDomain(c.Ctx.Request.Context(), input.ID); err != nil {
 			c.Fail(http.StatusNotFound, apperrors.CodeNotFound, "主域不存在")
 			return
 		}
@@ -208,12 +214,6 @@ func (c *AdminListController) SaveDomain() {
 		c.Fail(http.StatusConflict, apperrors.CodeConflict, "该 DNS 平台域名已添加，请编辑已有主域")
 		return
 	}
-	ciphertext, appErr := c.prepareDomainProviderConfig(input, existing, provider)
-	if appErr != nil {
-		c.FailApp(appErr)
-		return
-	}
-	input.ProviderConfigCiphertext = ciphertext
 	id, err := repo.UpsertDomain(c.Ctx.Request.Context(), input)
 	if err != nil {
 		c.Fail(http.StatusConflict, apperrors.CodeDatabaseConflict, "保存主域失败")
@@ -266,34 +266,6 @@ func (c *AdminListController) SyncDomainRecords() {
 	c.OK(result)
 }
 
-func (c *AdminListController) prepareDomainProviderConfig(input repositories.DomainWrite, existing repositories.DomainProviderConfig, provider dns.Provider) (string, *apperrors.AppError) {
-	hasInput := hasProviderConfigValue(input.ProviderConfig)
-	if input.ID > 0 && !hasInput && existing.ProviderKey == input.ProviderKey && existing.ProviderConfigCiphertext != "" {
-		return existing.ProviderConfigCiphertext, nil
-	}
-	config := normalizeProviderConfig(provider.ConfigFields(), input.ProviderConfig)
-	for _, field := range provider.ConfigFields() {
-		if field.Required && strings.TrimSpace(config[field.Name]) == "" {
-			return "", apperrors.New(apperrors.CodeInvalidArgument, "请完整填写 DNS 配置信息")
-		}
-	}
-	if err := provider.Configure(config); err != nil {
-		return "", apperrors.New(apperrors.CodeInvalidArgument, "DNS 配置格式不正确")
-	}
-	if err := provider.Check(c.Ctx.Request.Context()); err != nil {
-		return "", apperrors.New(apperrors.CodeInvalidArgument, "请检查 DNS 配置是否正确")
-	}
-	data, err := json.Marshal(config)
-	if err != nil {
-		return "", apperrors.New(apperrors.CodeInternal, "序列化 DNS 配置失败")
-	}
-	ciphertext, err := secrets.Encrypt(appSecret(), string(data))
-	if err != nil {
-		return "", apperrors.New(apperrors.CodeInternal, "加密 DNS 配置失败")
-	}
-	return ciphertext, nil
-}
-
 func hasProviderConfigValue(config map[string]string) bool {
 	for _, value := range config {
 		if strings.TrimSpace(value) != "" {
@@ -313,7 +285,7 @@ func normalizeProviderConfig(fields []dns.ConfigField, config map[string]string)
 
 func (c *AdminListController) Providers() {
 	repo := repositories.NewAdminRepository(app.DB())
-	stored, err := repo.StoredProviders(c.Ctx.Request.Context())
+	stored, err := repo.ProviderConfigs().StoredProviders(c.Ctx.Request.Context())
 	if err != nil {
 		c.Internal("获取 DNS 平台失败")
 		return
@@ -331,11 +303,175 @@ func (c *AdminListController) Providers() {
 	c.OK(items)
 }
 
+func (c *AdminListController) ProviderConfigs() {
+	filter := repositories.ProviderConfigFilter{
+		ProviderKey: strings.TrimSpace(c.GetString("provider")),
+		Keyword:     strings.TrimSpace(c.GetString("keyword")),
+	}
+	repo := repositories.NewAdminRepository(app.DB()).ProviderConfigs()
+	if page, ok := pageQuery(c); ok {
+		items, err := repo.ListPage(c.Ctx.Request.Context(), filter, page)
+		c.respondList(items, err, "获取平台配置失败")
+		return
+	}
+	items, err := repo.List(c.Ctx.Request.Context(), filter)
+	c.respondList(items, err, "获取平台配置失败")
+}
+
+func (c *AdminListController) SaveProviderConfig() {
+	var input repositories.ProviderConfigWrite
+	if !c.BindJSON(&input) {
+		return
+	}
+	if id := c.PathInt64(":id"); id > 0 {
+		input.ID = id
+	}
+	input.ProviderKey = strings.TrimSpace(input.ProviderKey)
+	input.Name = strings.TrimSpace(input.Name)
+	if input.ProviderKey == "" || input.Name == "" {
+		c.Fail(http.StatusBadRequest, apperrors.CodeInvalidArgument, "请填写平台配置名称")
+		return
+	}
+	provider, ok := dns.New(input.ProviderKey)
+	if !ok {
+		c.Fail(http.StatusBadRequest, apperrors.CodeInvalidArgument, "暂不支持此 DNS 平台")
+		return
+	}
+	repo := repositories.NewAdminRepository(app.DB()).ProviderConfigs()
+	var existing repositories.ProviderConfigRecord
+	if input.ID > 0 {
+		var err error
+		existing, err = repo.Get(c.Ctx.Request.Context(), input.ID)
+		if err != nil {
+			c.Fail(http.StatusNotFound, apperrors.CodeNotFound, "平台配置不存在")
+			return
+		}
+		// Platform type is immutable so linked domains keep a stable provider_key.
+		input.ProviderKey = existing.ProviderKey
+	}
+	if conflict, found, err := repo.FindByName(c.Ctx.Request.Context(), input.ProviderKey, input.Name, input.ID); err != nil {
+		c.Internal("检查平台配置名称失败")
+		return
+	} else if found {
+		_ = conflict
+		c.Fail(http.StatusConflict, apperrors.CodeConflict, "同一平台下配置名称已存在")
+		return
+	}
+	ciphertext, keepExisting, appErr := c.prepareProviderConfigCiphertext(input, existing, provider)
+	if appErr != nil {
+		c.FailApp(appErr)
+		return
+	}
+	input.ConfigCiphertext = ciphertext
+	input.KeepExistingCiphertext = keepExisting
+	id, err := repo.Upsert(c.Ctx.Request.Context(), input)
+	if err != nil {
+		c.Fail(http.StatusConflict, apperrors.CodeDatabaseConflict, "保存平台配置失败")
+		return
+	}
+	c.OK(map[string]any{"id": id})
+}
+
+func (c *AdminListController) DeleteProviderConfig() {
+	id := c.PathInt64(":id")
+	repo := repositories.NewAdminRepository(app.DB()).ProviderConfigs()
+	deleted, err := repo.Delete(c.Ctx.Request.Context(), id)
+	if err == repositories.ErrProviderConfigInUse {
+		c.Fail(http.StatusConflict, apperrors.CodeConflict, "仍有主域使用此配置，请先更换或删除相关主域")
+		return
+	}
+	if err != nil {
+		c.Internal("删除平台配置失败")
+		return
+	}
+	if !deleted {
+		c.Fail(http.StatusNotFound, apperrors.CodeNotFound, "平台配置不存在")
+		return
+	}
+	c.OK(map[string]any{"deleted": true})
+}
+
+func (c *AdminListController) prepareProviderConfigCiphertext(input repositories.ProviderConfigWrite, existing repositories.ProviderConfigRecord, provider dns.Provider) (string, bool, *apperrors.AppError) {
+	fields := provider.ConfigFields()
+	config := normalizeProviderConfig(fields, input.Config)
+
+	// Editing: blank fields keep previously stored values so users can leave secrets empty
+	// or only update optional settings (e.g. ProxyURL).
+	if input.ID > 0 && existing.ProviderKey == input.ProviderKey && strings.TrimSpace(existing.ConfigCiphertext) != "" {
+		stored, err := decryptProviderConfigMap(existing.ConfigCiphertext)
+		if err != nil {
+			return "", false, err
+		}
+		merged := mergeProviderConfig(fields, stored, config)
+		if !providerConfigChanged(fields, stored, merged) {
+			return "", true, nil
+		}
+		config = merged
+	}
+
+	for _, field := range fields {
+		if field.Required && strings.TrimSpace(config[field.Name]) == "" {
+			return "", false, apperrors.New(apperrors.CodeInvalidArgument, "请完整填写 DNS 配置信息")
+		}
+	}
+	if err := provider.Configure(config); err != nil {
+		return "", false, apperrors.New(apperrors.CodeInvalidArgument, "DNS 配置格式不正确")
+	}
+	if err := provider.Check(c.Ctx.Request.Context()); err != nil {
+		return "", false, apperrors.New(apperrors.CodeInvalidArgument, "请检查 DNS 配置是否正确")
+	}
+	data, err := json.Marshal(config)
+	if err != nil {
+		return "", false, apperrors.New(apperrors.CodeInternal, "序列化 DNS 配置失败")
+	}
+	ciphertext, err := secrets.Encrypt(appSecret(), string(data))
+	if err != nil {
+		return "", false, apperrors.New(apperrors.CodeInternal, "加密 DNS 配置失败")
+	}
+	return ciphertext, false, nil
+}
+
+func decryptProviderConfigMap(ciphertext string) (map[string]string, *apperrors.AppError) {
+	raw, err := secrets.Decrypt(appSecret(), ciphertext)
+	if err != nil {
+		return nil, apperrors.New(apperrors.CodeInternal, "解密 DNS 配置失败")
+	}
+	var decoded map[string]string
+	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+		return nil, apperrors.New(apperrors.CodeInternal, "解析 DNS 配置失败")
+	}
+	if decoded == nil {
+		decoded = map[string]string{}
+	}
+	return decoded, nil
+}
+
+func mergeProviderConfig(fields []dns.ConfigField, stored map[string]string, input map[string]string) map[string]string {
+	out := make(map[string]string, len(fields))
+	for _, field := range fields {
+		next := strings.TrimSpace(input[field.Name])
+		if next == "" {
+			next = strings.TrimSpace(stored[field.Name])
+		}
+		out[field.Name] = next
+	}
+	return out
+}
+
+func providerConfigChanged(fields []dns.ConfigField, stored map[string]string, next map[string]string) bool {
+	for _, field := range fields {
+		if strings.TrimSpace(stored[field.Name]) != strings.TrimSpace(next[field.Name]) {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *AdminListController) ProviderZones() {
 	var input struct {
-		Key      string            `json:"key"`
-		Config   map[string]string `json:"config"`
-		DomainID int64             `json:"domain_id"`
+		Key              string            `json:"key"`
+		Config           map[string]string `json:"config"`
+		ProviderConfigID int64             `json:"provider_config_id"`
 	}
 	if !c.BindJSON(&input) {
 		return
@@ -346,7 +482,7 @@ func (c *AdminListController) ProviderZones() {
 		c.Fail(http.StatusBadRequest, apperrors.CodeInvalidArgument, "暂不支持此 DNS 平台")
 		return
 	}
-	config, appErr := c.providerConfigForZoneList(input.Key, input.Config, input.DomainID, provider)
+	config, appErr := c.providerConfigForZoneList(input.Key, input.Config, input.ProviderConfigID, provider)
 	if appErr != nil {
 		c.FailApp(appErr)
 		return
@@ -374,7 +510,7 @@ func dnsProviderFailureMessage(message string, err error) string {
 	return message + "：" + detail
 }
 
-func (c *AdminListController) providerConfigForZoneList(key string, config map[string]string, domainID int64, provider dns.Provider) (map[string]string, *apperrors.AppError) {
+func (c *AdminListController) providerConfigForZoneList(key string, config map[string]string, providerConfigID int64, provider dns.Provider) (map[string]string, *apperrors.AppError) {
 	if hasProviderConfigValue(config) {
 		normalized := normalizeProviderConfig(provider.ConfigFields(), config)
 		for _, field := range provider.ConfigFields() {
@@ -384,17 +520,17 @@ func (c *AdminListController) providerConfigForZoneList(key string, config map[s
 		}
 		return normalized, nil
 	}
-	if domainID <= 0 {
-		return nil, apperrors.New(apperrors.CodeInvalidArgument, "请先填写 DNS 配置信息")
+	if providerConfigID <= 0 {
+		return nil, apperrors.New(apperrors.CodeInvalidArgument, "请先选择或填写 DNS 配置信息")
 	}
-	existing, err := repositories.NewAdminRepository(app.DB()).DomainProviderConfig(c.Ctx.Request.Context(), domainID)
+	existing, err := repositories.NewAdminRepository(app.DB()).ProviderConfigs().Get(c.Ctx.Request.Context(), providerConfigID)
 	if err != nil {
-		return nil, apperrors.New(apperrors.CodeNotFound, "主域不存在")
+		return nil, apperrors.New(apperrors.CodeNotFound, "平台配置不存在")
 	}
-	if existing.ProviderKey != key || strings.TrimSpace(existing.ProviderConfigCiphertext) == "" {
-		return nil, apperrors.New(apperrors.CodeInvalidArgument, "请先填写 DNS 配置信息")
+	if existing.ProviderKey != key || strings.TrimSpace(existing.ConfigCiphertext) == "" {
+		return nil, apperrors.New(apperrors.CodeInvalidArgument, "请先完善 DNS 配置信息")
 	}
-	raw, err := secrets.Decrypt(appSecret(), existing.ProviderConfigCiphertext)
+	raw, err := secrets.Decrypt(appSecret(), existing.ConfigCiphertext)
 	if err != nil {
 		return nil, apperrors.New(apperrors.CodeInternal, "解密 DNS 配置失败")
 	}

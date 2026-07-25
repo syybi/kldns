@@ -120,7 +120,7 @@ func TestHuaweiProviderRecordLifecycle(t *testing.T) {
 	if err := provider.DeleteRecord(context.Background(), zones[0], "record2"); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(requests, ",") != "GET /v2/zones,GET /v2/zones,GET /v2/zones/zone1/recordsets,POST /v2/zones/zone1/recordsets,PUT /v2/zones/zone1/recordsets/record2,GET /v2/zones/zone1/recordsets/record2,DELETE /v2/zones/zone1/recordsets/record2" {
+	if strings.Join(requests, ",") != "GET /v2/zones,GET /v2/zones,GET /v2/zones/zone1/recordsets,GET /v2/zones/zone1/recordsets,POST /v2/zones/zone1/recordsets,PUT /v2/zones/zone1/recordsets/record2,GET /v2/zones/zone1/recordsets/record2,DELETE /v2/zones/zone1/recordsets/record2" {
 		t.Fatalf("unexpected requests: %#v", requests)
 	}
 }

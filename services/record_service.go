@@ -20,7 +20,7 @@ type RecordRepository interface {
 	GetDomainForGroup(ctx context.Context, did int64, gid int64) (models.Domain, error)
 	GetSubdomainForUser(ctx context.Context, id int64, uid int64) (models.Subdomain, models.Domain, error)
 	GetRecordForUser(ctx context.Context, id int64, uid int64) (models.Record, error)
-	RecordNameExists(ctx context.Context, did int64, name string, recordType string, ignoreID int64) (bool, error)
+	RecordConflictExists(ctx context.Context, did int64, name string, recordType string, value string, lineID string, ignoreID int64) (bool, error)
 	AllowUnlimitedSubdomainRecords(ctx context.Context) (bool, error)
 	ApplyCreatedRecord(ctx context.Context, user models.User, domain models.Domain, record models.Record, log models.OperationLog) error
 	ApplyUpdatedRecord(ctx context.Context, recordID int64, record models.Record, log models.OperationLog) error
@@ -111,17 +111,18 @@ func (s *RecordService) Submit(ctx context.Context, input SubmitRecordInput) (Su
 	}
 	name := composeRecordName(subdomain.Name, relativeName)
 
-	conflict, err := s.Repo.RecordNameExists(ctx, domain.ID, name, recordType, ignoreID)
+	lineID := defaultLineID(input.LineID)
+	conflict, err := s.Repo.RecordConflictExists(ctx, domain.ID, name, recordType, value, lineID, ignoreID)
 	if err != nil {
 		return SubmitRecordResult{}, apperrors.Wrap(apperrors.CodeInternal, "检查记录冲突失败", err)
 	}
 	if conflict {
-		return SubmitRecordResult{}, apperrors.New(apperrors.CodeConflict, "此主机记录与解析类型已被使用，或 CNAME 记录与其他类型冲突")
+		return SubmitRecordResult{}, apperrors.New(apperrors.CodeConflict, "完全相同的解析记录已存在，或 CNAME 记录与同名其他记录冲突")
 	}
 
 	record := models.Record{
 		UID: user.ID, DID: domain.ID, SubdomainID: subdomain.ID, Name: name, Type: recordType,
-		Value: value, LineID: defaultLineID(input.LineID), Line: "默认",
+		Value: value, LineID: lineID, Line: "默认",
 	}
 	if input.ID > 0 {
 		return s.applyUpdate(ctx, user, domain, existing, record, source)

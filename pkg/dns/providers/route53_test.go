@@ -83,11 +83,11 @@ func TestRoute53ProviderRecordLifecycle(t *testing.T) {
 	if len(records) != 2 || records[0].Name != "www" || records[0].Value != "1.1.1.1" {
 		t.Fatalf("unexpected records: %#v", records)
 	}
-	created, err := provider.CreateRecord(context.Background(), zones[0], dns.RecordInput{Name: "api", Type: "A", Value: "2.2.2.2"})
+	created, err := provider.CreateRecord(context.Background(), zones[0], dns.RecordInput{Name: "api", Type: "A", Value: "3.3.3.3"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.RemoteID == "" || created.Name != "api" {
+	if created.RemoteID == "" || created.Name != "api" || created.Value != "3.3.3.3" {
 		t.Fatalf("unexpected created: %#v", created)
 	}
 	updated, err := provider.UpdateRecord(context.Background(), zones[0], created.RemoteID, dns.RecordInput{Name: "mail", Type: "MX", Value: "mail.example.com"})
@@ -99,6 +99,9 @@ func TestRoute53ProviderRecordLifecycle(t *testing.T) {
 	}
 	if len(changeBodies) < 2 {
 		t.Fatalf("expected create and update change bodies, got %d", len(changeBodies))
+	}
+	if !strings.Contains(changeBodies[0], "<Value>2.2.2.2</Value>") || !strings.Contains(changeBodies[0], "<Value>3.3.3.3</Value>") {
+		t.Fatalf("create should preserve existing RRset values: %s", changeBodies[0])
 	}
 	updateBody := changeBodies[1]
 	for _, want := range []string{
@@ -123,7 +126,7 @@ func TestRoute53ProviderRecordLifecycle(t *testing.T) {
 	if err := provider.DeleteRecord(context.Background(), zones[0], records[1].RemoteID); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(requests, ",") != "GET /2013-04-01/hostedzone,GET /2013-04-01/hostedzone,GET /2013-04-01/hostedzone/Z1/rrset,POST /2013-04-01/hostedzone/Z1/rrset,GET /2013-04-01/hostedzone/Z1/rrset,POST /2013-04-01/hostedzone/Z1/rrset,GET /2013-04-01/hostedzone/Z1/rrset,GET /2013-04-01/hostedzone/Z1/rrset,POST /2013-04-01/hostedzone/Z1/rrset" {
+	if strings.Join(requests, ",") != "GET /2013-04-01/hostedzone,GET /2013-04-01/hostedzone,GET /2013-04-01/hostedzone/Z1/rrset,GET /2013-04-01/hostedzone/Z1/rrset,POST /2013-04-01/hostedzone/Z1/rrset,GET /2013-04-01/hostedzone/Z1/rrset,POST /2013-04-01/hostedzone/Z1/rrset,GET /2013-04-01/hostedzone/Z1/rrset,GET /2013-04-01/hostedzone/Z1/rrset,POST /2013-04-01/hostedzone/Z1/rrset" {
 		t.Fatalf("unexpected requests: %#v", requests)
 	}
 }
