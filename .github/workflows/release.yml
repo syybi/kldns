@@ -107,10 +107,10 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
-          mkdir -p build/package
-          go build -trimpath -ldflags="-s -w" -o "build/package/${{ matrix.binary }}" .
+          mkdir -p build/package/configs
+          go build -trimpath -ldflags="-s -w" -o "build/package/${{ matrix.binary }}" ./cmd/server
           cp README.md build/package/
-          cp config.yaml build/package/
+          cp configs/config.yaml build/package/configs/
 
       - name: Package tar.gz
         if: matrix.archive == 'tar.gz'

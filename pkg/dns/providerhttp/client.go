@@ -86,7 +86,3 @@ func NormalizeBaseURL(raw string, fallback string, trailingSlash bool) string {
 	}
 	return raw
 }
-
-func JoinBaseURL(baseURL string, path string) string {
-	return strings.TrimRight(baseURL, "/") + "/" + strings.TrimLeft(path, "/")
-}

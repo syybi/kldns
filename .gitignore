@@ -7,7 +7,7 @@ data/
 # Build binaries & release packages
 /kldns
 /kldns.exe
-outputs/
+/bin/
 
 # Frontend
 web/node_modules/

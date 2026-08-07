@@ -2,7 +2,7 @@
 
 KLDNS 是一个二级域名分发和 DNS 解析管理系统，支持用户注册二级域名、积分扣费、域名审核、解析记录管理和后台运维管理。
 
-当前版本：`1.0.6`
+当前版本：`1.0.7`
 
 ## 技术栈
 
@@ -13,22 +13,25 @@ KLDNS 是一个二级域名分发和 DNS 解析管理系统，支持用户注册
 ## 目录
 
 ```text
-main.go                  # 程序入口
-config.yaml              # 运行配置
-controllers/             # HTTP 控制器
-middleware/              # 中间件
-models/                  # 数据模型
-repositories/            # 数据访问
-routes/                  # 路由注册
-services/                # 业务逻辑
-pkg/dns/                 # DNS 平台适配器
-migrations/              # SQLite 迁移
-web/                     # 前端工程
+cmd/server/main.go                     # 服务端入口
+internal/handler/                      # HTTP 处理器与路由注册
+internal/service/                      # 业务逻辑
+internal/repository/                   # 数据访问
+internal/repository/migrations/        # 内嵌 SQLite 迁移
+internal/model/                        # 数据模型与响应结构
+internal/config/                       # 配置定义与加载
+internal/middleware/                   # Gin 中间件
+internal/runtime/                      # 进程运行时依赖
+pkg/dns/                               # DNS 平台适配器
+pkg/utils/                             # 通用工具包
+configs/config.yaml                    # 默认运行配置
+scripts/                               # 开发、测试与构建脚本
+web/                                   # Vue 前端工程
 ```
 
 ## 配置
 
-默认读取根目录 `config.yaml`，也可以通过 `KLDNS_CONFIG` 指定配置文件。
+默认读取 `configs/config.yaml`，也可以通过 `KLDNS_CONFIG` 指定配置文件。
 
 ```yaml
 app:
@@ -53,7 +56,8 @@ security:
 
 ```powershell
 go test ./...
-go run .
+go run ./cmd/server
+# 或执行：./scripts/dev.ps1
 ```
 
 前端：
@@ -71,14 +75,14 @@ npm run dev
 ## 打包
 
 ```powershell
-cd web
-npm run build
-cd ..
-go build -o kldns.exe .
+./scripts/build.ps1
+# 或执行：make build
 ```
 
-二进制会内嵌迁移文件和前端构建产物。`config.yaml` 和 `data/kldns.db` 仍为外部运行文件。
+`build.ps1` 会在 `bin/` 下生成 `kldns-windows-amd64.exe` 和
+`kldns-linux-amd64`。二进制会内嵌迁移文件和前端构建产物，
+`configs/config.yaml` 和 `data/kldns.db` 仍为外部运行文件。
 
 ## 数据库迁移
 
-程序启动时会自动执行内嵌的 `migrations/` 迁移，并记录到 `schema_migrations`。修改表结构时必须新增迁移文件。
+程序启动时会自动执行内嵌的 `internal/repository/migrations/` 迁移，并记录到 `schema_migrations`。修改表结构时必须新增迁移文件。
